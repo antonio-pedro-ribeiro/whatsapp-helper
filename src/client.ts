@@ -33,7 +33,9 @@ export async function getClient(): Promise<Client> {
   await new Promise<void>((resolve, reject) => {
     client.on('ready', () => {
       process.stderr.write('WhatsApp client ready.\n');
-      resolve();
+      // WhatsApp's internal chat store keeps loading after 'ready' fires.
+      // A short buffer prevents getChats() from hanging on the first call.
+      setTimeout(resolve, 1000);
     });
     client.on('auth_failure', reject);
     client.initialize().catch(reject);
@@ -45,7 +47,16 @@ export async function getClient(): Promise<Client> {
 
 export async function destroyClient(): Promise<void> {
   if (clientInstance) {
-    await clientInstance.destroy();
+    try {
+      // Cap destroy() so a hung Puppeteer never blocks process.exit().
+      await Promise.race([
+        clientInstance.destroy(),
+        new Promise<void>((resolve) => setTimeout(resolve, 5000)),
+      ]);
+    } catch {
+      // TargetCloseError / "process not found" are expected when Chrome is
+      // already shutting down — safe to ignore.
+    }
     clientInstance = null;
   }
 }

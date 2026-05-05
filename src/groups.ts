@@ -16,7 +16,15 @@ function sanitizeName(name: string): string {
 
 async function getAllGroups(): Promise<GroupChat[]> {
   const client = await getClient();
-  const chats = await client.getChats();
+  const chats = await Promise.race([
+    client.getChats(),
+    new Promise<never>((_, reject) =>
+      setTimeout(
+        () => reject(new Error('Timed out loading chats (60s). Try "wha reset" if this persists.')),
+        60_000
+      )
+    ),
+  ]);
   return chats.filter((c) => c.isGroup) as GroupChat[];
 }
 
