@@ -1,0 +1,12 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npm install *)",
+      "Bash(npm run *)",
+      "Bash(node dist/cli.js --help)",
+      "Bash(node dist/cli.js groups --help)",
+      "Bash(node dist/cli.js extract --help)",
+      "Bash(node dist/cli.js compare --help)"
+    ]
+  }
+}

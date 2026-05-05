@@ -1,0 +1,5 @@
+node_modules/
+dist/
+data/
+.wwebjs_auth/
+*.js.map
