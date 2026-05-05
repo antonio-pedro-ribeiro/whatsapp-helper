@@ -1,9 +1,81 @@
 #!/usr/bin/env node
 import fs from 'fs';
+import path from 'path';
 import { Command } from 'commander';
 import { destroyClient } from './client';
 import { compareExtractions } from './compare';
 import { extractGroup, listGroups } from './groups';
+import type { Extraction } from './types';
+
+function showStatus(): void {
+  // ── Session ──────────────────────────────────────────────────────────────
+  const authDir = '.wwebjs_auth';
+
+  console.log('Session');
+  if (!fs.existsSync(authDir)) {
+    console.log('  Status:    no saved session — next run will show a QR code');
+  } else {
+    // LocalAuth stores data in a subdirectory whose name depends on clientId
+    // (e.g. "session" or "session-<id>"). Find whichever one is present.
+    const sessionDir = fs.readdirSync(authDir)
+      .map((f) => path.join(authDir, f))
+      .find((f) => fs.statSync(f).isDirectory());
+
+    if (!sessionDir) {
+      console.log('  Status:    auth directory exists but session data is missing');
+      console.log('  Action:    run "wha reset" then reconnect');
+    } else {
+      const mtime = fs.statSync(sessionDir).mtime;
+      console.log('  Status:    saved');
+      console.log(`  Last used: ${mtime.toISOString().replace('T', ' ').slice(0, 16)}`);
+    }
+  }
+
+  // ── Data ─────────────────────────────────────────────────────────────────
+  const dataDir = 'data';
+  console.log('\nData');
+  if (!fs.existsSync(dataDir)) {
+    console.log('  No extraction files yet — run "wha extract <group>"');
+    return;
+  }
+
+  const jsonFiles = fs.readdirSync(dataDir)
+    .filter((f) => f.endsWith('.json'))
+    .map((f) => path.join(dataDir, f))
+    .sort((a, b) => fs.statSync(b).mtimeMs - fs.statSync(a).mtimeMs);
+
+  if (jsonFiles.length === 0) {
+    console.log('  No extraction files yet — run "wha extract <group>"');
+    return;
+  }
+
+  // Group files by groupId
+  const byGroup = new Map<string, { name: string; count: number; latest: Extraction }>();
+  for (const f of jsonFiles) {
+    try {
+      const ex: Extraction = JSON.parse(fs.readFileSync(f, 'utf-8'));
+      const entry = byGroup.get(ex.groupId);
+      if (!entry) {
+        byGroup.set(ex.groupId, { name: ex.groupName, count: 1, latest: ex });
+      } else {
+        entry.count++;
+        if (ex.extractedAt > entry.latest.extractedAt) entry.latest = ex;
+      }
+    } catch {
+      // skip malformed files
+    }
+  }
+
+  console.log(`  ${jsonFiles.length} extraction file(s) across ${byGroup.size} group(s)\n`);
+
+  const nameWidth = Math.max(...[...byGroup.values()].map((e) => e.name.length), 10);
+  console.log(`  ${'Group'.padEnd(nameWidth)}  Files  Members  Last extracted`);
+  console.log(`  ${'-'.repeat(nameWidth)}  -----  -------  --------------`);
+  for (const { name, count, latest } of byGroup.values()) {
+    const ts = latest.extractedAt.replace('T', ' ').slice(0, 16);
+    console.log(`  ${name.padEnd(nameWidth)}  ${String(count).padEnd(5)}  ${String(latest.members.length).padEnd(7)}  ${ts}`);
+  }
+}
 
 const program = new Command();
 
@@ -49,6 +121,18 @@ program
   .action(async (file1?: string, file2?: string) => {
     try {
       compareExtractions(file1, file2);
+    } catch (err) {
+      console.error((err as Error).message);
+      process.exitCode = 1;
+    }
+  });
+
+program
+  .command('status')
+  .description('Show session and data directory status (no WhatsApp connection needed)')
+  .action(() => {
+    try {
+      showStatus();
     } catch (err) {
       console.error((err as Error).message);
       process.exitCode = 1;

@@ -23,13 +23,14 @@ Authenticate with WhatsApp using `whatsapp-web.js` (QR-code-based, same mechanis
 ```
 whatsapp-helper/
 ├── src/
-│   ├── cli.ts           # Commander entrypoint, subcommand wiring
+│   ├── cli.ts           # Commander entrypoint, subcommand wiring, status command
 │   ├── client.ts        # whatsapp-web.js client init, QR display, session persistence
-│   ├── groups.ts        # list-groups and extract commands
+│   ├── groups.ts        # groups and extract commands
 │   ├── compare.ts       # diff logic between two extraction files
 │   └── types.ts         # Member, Extraction, DiffResult interfaces
 ├── data/                # Extraction output files (gitignored)
 ├── .wwebjs_auth/        # whatsapp-web.js session cache (gitignored)
+├── test.js              # Self-contained test runner (no framework)
 ├── package.json
 ├── tsconfig.json
 └── CLAUDE.MD
@@ -61,6 +62,20 @@ interface DiffResult {
 }
 ```
 
+## Usage
+
+```
+wha <command> [options]
+
+Commands:
+  groups                  List all WhatsApp groups you are a member of
+  extract <group>         Extract members of a group and save to data/
+  compare [file1] [file2] Diff two extraction files
+  status                  Show session and data directory status
+  reset                   Delete the saved session (triggers new QR on next run)
+  help [command]          Display help for a command
+```
+
 ## Commands
 
 ### `wha groups`
@@ -73,7 +88,7 @@ wha groups
 Output: table of group name and group ID.
 
 ### `wha extract <group-name-or-id>`
-Extract members of the specified group and save to `data/<groupId>_<timestamp>.json`.
+Extract members of the specified group and save to `data/<name>_<timestamp>.json`.
 
 ```
 wha extract "My Group Name"
@@ -91,15 +106,6 @@ Format:
 - One member per line: `+<phone>  <name>  [admin]`
 - Named members listed first (alphabetically), unnamed members after
 
-### `wha reset`
-Delete the saved WhatsApp session so the next run shows a fresh QR code.
-
-```
-wha reset
-```
-
-Removes `.wwebjs_auth/`. Use this when the session has expired and re-authentication is failing, or to switch to a different WhatsApp account.
-
 ### `wha compare [file1] [file2]`
 Compare two extraction files. If no files given, automatically uses the two most recent files for the same group under `data/`.
 
@@ -109,6 +115,29 @@ wha compare data/abc_2025-01-01.json data/abc_2025-02-01.json
 ```
 
 Output: two sections — **Added** and **Removed** — each as a table of phone + name.
+
+### `wha status`
+Show session and data directory status. Runs instantly with no WhatsApp connection needed.
+
+```
+wha status
+```
+
+Output:
+- **Session** — whether a saved session exists and when it was last used. Possible states:
+  - `saved` — session is present, last-used timestamp shown
+  - `no saved session` — `.wwebjs_auth/` is absent; next run will show a QR code
+  - `session data missing` — directory exists but is empty (corrupted); run `wha reset`
+- **Data** — per-group summary of extraction files: file count, most recent member count, last extraction timestamp
+
+### `wha reset`
+Delete the saved WhatsApp session so the next run shows a fresh QR code.
+
+```
+wha reset
+```
+
+Removes `.wwebjs_auth/`. Use this when the session has expired and re-authentication is failing, or to switch to a different WhatsApp account.
 
 ## Authentication Flow
 
@@ -127,27 +156,38 @@ Output: two sections — **Added** and **Removed** — each as a table of phone 
 ```sh
 npm install
 npm run build        # tsc → dist/
-node dist/cli.js groups
-node dist/cli.js extract "My Group"
-node dist/cli.js compare
+npm link             # registers 'wha' as a global command
 ```
 
-Or with ts-node for development:
+Then use from any directory:
 
 ```sh
-npx ts-node src/cli.ts groups
+wha status
+wha groups
+wha extract "My Group"
+wha extract "My Group" --txt
+wha compare
+wha reset
 ```
 
-A `bin` field in `package.json` maps `wha` → `dist/cli.js` so `npm link` makes the `wha` command available globally.
+Or run directly without linking:
+
+```sh
+node dist/cli.js groups
+```
 
 ## Key Implementation Notes
 
-- Use `LocalAuth` (not `NoAuth`) so sessions survive process restarts.
+- Use `LocalAuth` (not `NoAuth`) so sessions survive process restarts. Session is stored in `.wwebjs_auth/session/`.
+- `ready` fires before WhatsApp's internal chat store finishes loading. A 1-second delay after `ready` prevents `getChats()` from hanging on first call.
+- `getChats()` is wrapped with a 60-second timeout; if it expires the error message suggests `wha reset`.
+- `client.destroy()` is capped at 5 seconds and its errors are swallowed — `TargetCloseError` is expected when Chrome is already shutting down.
 - whatsapp-web.js `client.getChats()` returns all chats; filter by `chat.isGroup` to get groups.
 - Group participants are on `groupChat.participants` — each has `id.user` (phone) and `isAdmin`.
-- Display names: prefer `contact.pushname`, fall back to `contact.name`, then empty string. Fetching contacts requires `client.getContactById(participant.id._serialized)` — this adds latency; batch or skip for large groups if needed.
+- Display names: prefer `contact.pushname`, fall back to `contact.name`, then empty string. Fetching contacts requires `client.getContactById(participant.id._serialized)` — this adds latency for large groups.
 - The `compare` command matches members by phone number, not by name (names change).
-- Print QR code to stderr so stdout output stays clean for scripting.
+- QR code is printed to stderr so stdout stays clean for scripting.
+- Commands that open the WhatsApp client call `process.exit()` explicitly after `destroyClient()` — Puppeteer keeps handles that prevent natural Node.js exit.
 
 ## Dependencies
 
