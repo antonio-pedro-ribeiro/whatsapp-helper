@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import fs from 'fs';
 import { Command } from 'commander';
 import { destroyClient } from './client';
 import { compareExtractions } from './compare';
@@ -22,6 +23,7 @@ program
       process.exitCode = 1;
     } finally {
       await destroyClient();
+      process.exit(process.exitCode ?? 0);
     }
   });
 
@@ -37,6 +39,7 @@ program
       process.exitCode = 1;
     } finally {
       await destroyClient();
+      process.exit(process.exitCode ?? 0);
     }
   });
 
@@ -50,6 +53,19 @@ program
       console.error((err as Error).message);
       process.exitCode = 1;
     }
+  });
+
+program
+  .command('reset')
+  .description('Delete the saved WhatsApp session so the next run shows a fresh QR code')
+  .action(() => {
+    const authDir = '.wwebjs_auth';
+    if (!fs.existsSync(authDir)) {
+      console.log('No saved session found — nothing to reset.');
+      return;
+    }
+    fs.rmSync(authDir, { recursive: true, force: true });
+    console.log(`Deleted ${authDir}. Next run will show a new QR code.`);
   });
 
 program.parseAsync(process.argv).catch((err) => {

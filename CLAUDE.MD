@@ -91,6 +91,15 @@ Format:
 - One member per line: `+<phone>  <name>  [admin]`
 - Named members listed first (alphabetically), unnamed members after
 
+### `wha reset`
+Delete the saved WhatsApp session so the next run shows a fresh QR code.
+
+```
+wha reset
+```
+
+Removes `.wwebjs_auth/`. Use this when the session has expired and re-authentication is failing, or to switch to a different WhatsApp account.
+
 ### `wha compare [file1] [file2]`
 Compare two extraction files. If no files given, automatically uses the two most recent files for the same group under `data/`.
 
