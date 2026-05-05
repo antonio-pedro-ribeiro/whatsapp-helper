@@ -50,7 +50,28 @@ export async function listGroups(): Promise<void> {
   }
 }
 
-export async function extractGroup(query: string): Promise<void> {
+export function extractionToTxt(extraction: Extraction): string {
+  const lines: string[] = [
+    `Group:     ${extraction.groupName}`,
+    `Extracted: ${extraction.extractedAt}`,
+    `Members:   ${extraction.members.length}`,
+    '',
+  ];
+
+  const named = extraction.members.filter((m) => m.name).sort((a, b) => a.name.localeCompare(b.name));
+  const unnamed = extraction.members.filter((m) => !m.name);
+
+  const phoneWidth = Math.max(...extraction.members.map((m) => m.phone.length), 5);
+
+  for (const m of [...named, ...unnamed]) {
+    const admin = m.isAdmin ? '  [admin]' : '';
+    lines.push(`+${m.phone.padEnd(phoneWidth)}  ${m.name}${admin}`);
+  }
+
+  return lines.join('\n') + '\n';
+}
+
+export async function extractGroup(query: string, opts: { txt?: boolean } = {}): Promise<void> {
   ensureDataDir();
   const client = await getClient();
   const groups = await getAllGroups();
@@ -78,10 +99,16 @@ export async function extractGroup(query: string): Promise<void> {
   };
 
   const timestamp = extraction.extractedAt.replace(/[:.]/g, '-');
-  const filename = `${sanitizeName(group.name)}_${timestamp}.json`;
-  const outPath = path.join(DATA_DIR, filename);
-  fs.writeFileSync(outPath, JSON.stringify(extraction, null, 2), 'utf-8');
+  const base = `${sanitizeName(group.name)}_${timestamp}`;
+  const jsonPath = path.join(DATA_DIR, `${base}.json`);
+  fs.writeFileSync(jsonPath, JSON.stringify(extraction, null, 2), 'utf-8');
 
   console.log(`Extracted ${members.length} members from "${group.name}"`);
-  console.log(`Saved to: ${outPath}`);
+  console.log(`Saved to: ${jsonPath}`);
+
+  if (opts.txt) {
+    const txtPath = path.join(DATA_DIR, `${base}.txt`);
+    fs.writeFileSync(txtPath, extractionToTxt(extraction), 'utf-8');
+    console.log(`Saved to: ${txtPath}`);
+  }
 }

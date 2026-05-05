@@ -78,9 +78,18 @@ Extract members of the specified group and save to `data/<groupId>_<timestamp>.j
 ```
 wha extract "My Group Name"
 wha extract 5511999990000-1234567890@g.us
+wha extract "My Group Name" --txt
 ```
 
-Prints a confirmation with member count and output file path.
+Prints a confirmation with member count and output file path(s).
+
+#### `--txt` flag
+When passed, also writes a human-readable `.txt` file alongside the JSON at the same base path (`data/<name>_<timestamp>.txt`).
+
+Format:
+- Header: group name, extraction timestamp, member count
+- One member per line: `+<phone>  <name>  [admin]`
+- Named members listed first (alphabetically), unnamed members after
 
 ### `wha compare [file1] [file2]`
 Compare two extraction files. If no files given, automatically uses the two most recent files for the same group under `data/`.

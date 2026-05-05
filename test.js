@@ -1,0 +1,204 @@
+// Standalone test runner — no test framework needed.
+// All fixtures are fabricated inline; no dependency on real WhatsApp data.
+
+const fs = require('fs');
+const path = require('path');
+const { execSync } = require('child_process');
+
+let passed = 0;
+let failed = 0;
+
+function assert(condition, label) {
+  if (condition) {
+    console.log(`  PASS  ${label}`);
+    passed++;
+  } else {
+    console.error(`  FAIL  ${label}`);
+    failed++;
+  }
+}
+
+function assertContains(haystack, needle, label) {
+  assert(haystack.includes(needle), `${label}  [expected: ${JSON.stringify(needle)}]`);
+}
+
+// ─── Fixtures ────────────────────────────────────────────────────────────────
+
+const GROUP_ID = '66658120500-1588652598@g.us';
+
+const FIXTURE_BEFORE = {
+  groupId: GROUP_ID,
+  groupName: 'Open to Bliss updates',
+  extractedAt: '2026-01-01T10:00:00.000Z',
+  members: [
+    { phone: '351917190172', name: 'Alexandra Sedas',  isAdmin: false },
+    { phone: '33665757442',  name: 'Alison Sarah Pym', isAdmin: false },
+    { phone: '5215579091711', name: 'Satyama Ratna',   isAdmin: true  },
+    { phone: '447584665606', name: '',                 isAdmin: false },
+    { phone: '66963160339',  name: '',                 isAdmin: false },
+  ],
+};
+
+const FIXTURE_AFTER = {
+  groupId: GROUP_ID,
+  groupName: 'Open to Bliss updates',
+  extractedAt: '2026-02-01T10:00:00.000Z',
+  members: [
+    // Alexandra removed, New Person added, rest unchanged
+    { phone: '33665757442',  name: 'Alison Sarah Pym', isAdmin: false },
+    { phone: '5215579091711', name: 'Satyama Ratna',   isAdmin: true  },
+    { phone: '447584665606', name: '',                 isAdmin: false },
+    { phone: '66963160339',  name: '',                 isAdmin: false },
+    { phone: '999999999999', name: 'New Person',        isAdmin: false },
+  ],
+};
+
+const FIXTURE_SAME = {
+  ...FIXTURE_BEFORE,
+  extractedAt: '2026-03-01T10:00:00.000Z',
+};
+
+const BEFORE_FILE = path.join('data', '_test_before.json');
+const AFTER_FILE  = path.join('data', '_test_after.json');
+const SAME_FILE   = path.join('data', '_test_same.json');
+
+if (!fs.existsSync('data')) fs.mkdirSync('data');
+
+// ─── Suite 1: TXT formatting ─────────────────────────────────────────────────
+
+console.log('\n=== Suite 1: TXT formatting ===');
+
+const { extractionToTxt } = require('./dist/groups');
+
+const txt = extractionToTxt(FIXTURE_BEFORE);
+const txtLines = txt.split('\n');
+
+assertContains(txt, 'Group:     Open to Bliss updates',   'header: group name');
+assertContains(txt, 'Extracted: 2026-01-01T10:00:00.000Z', 'header: timestamp');
+assertContains(txt, 'Members:   5',                        'header: member count');
+
+assertContains(txt, '+5215579091711', 'admin phone present');
+assertContains(txt, 'Satyama Ratna',  'admin name present');
+assertContains(txt, '[admin]',         'admin flag present');
+
+// Named members first, then unnamed
+const namedLines   = txtLines.filter(l => /^\+\d/.test(l) && l.trim().split(/\s{2,}/)[1]);
+const unnamedLines = txtLines.filter(l => /^\+\d/.test(l) && !l.trim().split(/\s{2,}/)[1]);
+const lastNamedIdx   = Math.max(...namedLines.map(l => txtLines.indexOf(l)));
+const firstUnnamedIdx = Math.min(...unnamedLines.map(l => txtLines.lastIndexOf(l)));
+assert(lastNamedIdx < firstUnnamedIdx, 'named members appear before unnamed members');
+
+// Alphabetical: Alexandra before Alison
+const alexIdx   = txt.indexOf('Alexandra Sedas');
+const alisonIdx = txt.indexOf('Alison Sarah Pym');
+assert(alexIdx < alisonIdx, 'alphabetical ordering of named members');
+
+// All 5 members present
+const memberLines = txtLines.filter(l => /^\+\d/.test(l));
+assert(memberLines.length === 5, `all 5 members present (got ${memberLines.length})`);
+
+// Admin member not in unnamed section
+const adminLine = txtLines.find(l => l.includes('Satyama Ratna'));
+assert(adminLine && adminLine.includes('[admin]') && !adminLine.includes('[admin]  [admin]'),
+  'admin line has exactly one [admin] tag');
+
+// ─── Suite 2: TXT written to disk ────────────────────────────────────────────
+
+console.log('\n=== Suite 2: TXT written to disk ===');
+
+const txtPath = path.join('data', '_test_output.txt');
+if (fs.existsSync(txtPath)) fs.unlinkSync(txtPath);
+
+fs.writeFileSync(txtPath, extractionToTxt(FIXTURE_BEFORE), 'utf-8');
+assert(fs.existsSync(txtPath), 'txt file created');
+
+const fromDisk = fs.readFileSync(txtPath, 'utf-8');
+assertContains(fromDisk, 'Members:   5', 'txt file has correct member count');
+assertContains(fromDisk, '[admin]',      'txt file contains admin flag');
+
+const diskMemberLines = fromDisk.split('\n').filter(l => /^\+\d/.test(l));
+assert(diskMemberLines.length === 5, `txt file has all 5 member lines (got ${diskMemberLines.length})`);
+
+fs.unlinkSync(txtPath);
+
+// ─── Suite 3: Compare — changes detected ─────────────────────────────────────
+
+console.log('\n=== Suite 3: Compare — changes detected ===');
+
+fs.writeFileSync(BEFORE_FILE, JSON.stringify(FIXTURE_BEFORE, null, 2));
+fs.writeFileSync(AFTER_FILE,  JSON.stringify(FIXTURE_AFTER,  null, 2));
+
+try {
+  const out = execSync(
+    `node dist/cli.js compare ${BEFORE_FILE} ${AFTER_FILE}`,
+    { encoding: 'utf-8' }
+  );
+
+  console.log('\n  [compare output]\n' + out.split('\n').map(l => '  ' + l).join('\n'));
+
+  assertContains(out, 'Open to Bliss updates',      'group name shown');
+  assertContains(out, '2026-01-01T10:00:00.000Z',   'before timestamp shown');
+  assertContains(out, '2026-02-01T10:00:00.000Z',   'after timestamp shown');
+  assertContains(out, 'Added (1)',                   'correct added count');
+  assertContains(out, 'Removed (1)',                 'correct removed count');
+  assertContains(out, '999999999999',                'added member phone present');
+  assertContains(out, 'New Person',                  'added member name present');
+  assertContains(out, '351917190172',                'removed member phone present');
+  assertContains(out, 'Alexandra Sedas',             'removed member name present');
+
+  // Unchanged members must not appear in added/removed sections
+  const addedSection   = out.slice(out.indexOf('Added'));
+  const removedSection = out.slice(out.indexOf('Removed'));
+  assert(!addedSection.includes('Alison'),   'unchanged member not in added section');
+  assert(!removedSection.includes('999999'), 'new member not in removed section');
+} finally {
+  fs.unlinkSync(BEFORE_FILE);
+  fs.unlinkSync(AFTER_FILE);
+}
+
+// ─── Suite 4: Compare — no changes ───────────────────────────────────────────
+
+console.log('\n=== Suite 4: Compare — no changes ===');
+
+fs.writeFileSync(BEFORE_FILE, JSON.stringify(FIXTURE_BEFORE, null, 2));
+fs.writeFileSync(SAME_FILE,   JSON.stringify(FIXTURE_SAME,   null, 2));
+
+try {
+  const out = execSync(
+    `node dist/cli.js compare ${BEFORE_FILE} ${SAME_FILE}`,
+    { encoding: 'utf-8' }
+  );
+  assertContains(out, 'No membership changes detected.', 'no-change message shown');
+} finally {
+  fs.unlinkSync(BEFORE_FILE);
+  fs.unlinkSync(SAME_FILE);
+}
+
+// ─── Suite 5: Compare auto-detect (two files, same group) ────────────────────
+
+console.log('\n=== Suite 5: Compare auto-detect ===');
+
+// Write two files with same groupId, different timestamps
+const autoA = path.join('data', '_autotest_a.json');
+const autoB = path.join('data', '_autotest_b.json');
+fs.writeFileSync(autoA, JSON.stringify(FIXTURE_BEFORE, null, 2));
+// tiny delay so mtime differs, then write B as the "newer" file
+fs.writeFileSync(autoB, JSON.stringify(FIXTURE_AFTER, null, 2));
+// touch autoB to ensure it's newer
+fs.utimesSync(autoB, new Date(), new Date(Date.now() + 1000));
+
+try {
+  const out = execSync(`node dist/cli.js compare`, { encoding: 'utf-8' });
+  assertContains(out, 'Open to Bliss updates', 'auto-detect: correct group name');
+  assertContains(out, 'Added (1)',              'auto-detect: found added member');
+  assertContains(out, 'Removed (1)',            'auto-detect: found removed member');
+} finally {
+  fs.unlinkSync(autoA);
+  fs.unlinkSync(autoB);
+}
+
+// ─── Summary ─────────────────────────────────────────────────────────────────
+
+console.log(`\n${'─'.repeat(40)}`);
+console.log(`Results: ${passed} passed, ${failed} failed`);
+if (failed > 0) process.exit(1);

@@ -28,9 +28,10 @@ program
 program
   .command('extract <group>')
   .description('Extract members of a group by name or ID and save to data/')
-  .action(async (group: string) => {
+  .option('--txt', 'also save a plain-text (.txt) version alongside the JSON')
+  .action(async (group: string, opts: { txt?: boolean }) => {
     try {
-      await extractGroup(group);
+      await extractGroup(group, opts);
     } catch (err) {
       console.error((err as Error).message);
       process.exitCode = 1;
