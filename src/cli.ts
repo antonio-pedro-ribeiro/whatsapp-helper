@@ -4,6 +4,7 @@ import path from 'path';
 import { Command } from 'commander';
 import { destroyClient } from './client';
 import { compareExtractions } from './compare';
+import { exportChat, listChats } from './export';
 import { extractGroup, listGroups } from './groups';
 import type { Extraction } from './types';
 
@@ -81,7 +82,7 @@ const program = new Command();
 
 program
   .name('wha')
-  .description('WhatsApp group member extractor and differ')
+  .description('WhatsApp group member extractor and differ, and chat exporter')
   .version('1.0.0');
 
 program
@@ -106,6 +107,40 @@ program
   .action(async (group: string, opts: { txt?: boolean }) => {
     try {
       await extractGroup(group, opts);
+    } catch (err) {
+      console.error((err as Error).message);
+      process.exitCode = 1;
+    } finally {
+      await destroyClient();
+      process.exit(process.exitCode ?? 0);
+    }
+  });
+
+program
+  .command('chats')
+  .description('List all WhatsApp chats (individual and group)')
+  .action(async () => {
+    try {
+      await listChats();
+    } catch (err) {
+      console.error((err as Error).message);
+      process.exitCode = 1;
+    } finally {
+      await destroyClient();
+      process.exit(process.exitCode ?? 0);
+    }
+  });
+
+program
+  .command('export <chat>')
+  .description('Export the messages of a chat (by name, phone number or ID) to exports/')
+  .option('--limit <n>', 'only export the most recent <n> messages', (v) => Number.parseInt(v, 10))
+  .option('--since <date>', 'only export messages on or after <date> (e.g. 2026-01-31)')
+  .option('--json', 'also save a machine-readable (.json) version alongside the .txt')
+  .option('--media', 'download media attachments into a folder next to the export')
+  .action(async (chat: string, opts: { limit?: number; since?: string; json?: boolean; media?: boolean }) => {
+    try {
+      await exportChat(chat, opts);
     } catch (err) {
       console.error((err as Error).message);
       process.exitCode = 1;

@@ -1,6 +1,6 @@
 import fs from 'fs';
 import path from 'path';
-import { GroupChat } from 'whatsapp-web.js';
+import { Chat, GroupChat } from 'whatsapp-web.js';
 import { getClient } from './client';
 import type { Extraction, Member } from './types';
 
@@ -10,13 +10,13 @@ function ensureDataDir(): void {
   if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
 }
 
-function sanitizeName(name: string): string {
+export function sanitizeName(name: string): string {
   return name.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 60);
 }
 
-async function getAllGroups(): Promise<GroupChat[]> {
+export async function getAllChats(): Promise<Chat[]> {
   const client = await getClient();
-  const chats = await Promise.race([
+  return Promise.race([
     client.getChats(),
     new Promise<never>((_, reject) =>
       setTimeout(
@@ -25,6 +25,10 @@ async function getAllGroups(): Promise<GroupChat[]> {
       )
     ),
   ]);
+}
+
+async function getAllGroups(): Promise<GroupChat[]> {
+  const chats = await getAllChats();
   return chats.filter((c) => c.isGroup) as GroupChat[];
 }
 

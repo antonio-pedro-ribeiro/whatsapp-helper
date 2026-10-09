@@ -7,6 +7,7 @@ A Windows CLI tool for connecting to WhatsApp, extracting group member lists, an
 - **Authenticate** with WhatsApp via QR code (same as WhatsApp Web)
 - **Extract** the member list of any group you belong to (phone + display name) and save it as a timestamped JSON file
 - **Compare** two extractions to see who joined or left a group
+- **Export** the message history of any chat (individual or group) to a readable `.txt`, optionally with `.json` and media
 
 ## Prerequisites
 
@@ -35,6 +36,12 @@ wha <command>
 | `wha groups` | List all WhatsApp groups you are a member of |
 | `wha extract <group>` | Extract members of a group to `data/` |
 | `wha extract <group> --txt` | Also write a human-readable `.txt` alongside the JSON |
+| `wha chats` | List all chats (individual and group) with their IDs |
+| `wha export <chat>` | Export a chat's messages to `exports/` (`<chat>` = name, phone number or chat ID) |
+| `wha export <chat> --json` | Also write a machine-readable `.json` |
+| `wha export <chat> --media` | Also download media attachments into `exports/<name>_<timestamp>_media/` |
+| `wha export <chat> --limit <n>` | Only the most recent `<n>` messages |
+| `wha export <chat> --since <date>` | Only messages on or after `<date>` (e.g. `2026-01-31`) |
 | `wha compare` | Diff the two most recent extractions for the same group |
 | `wha compare <file1> <file2>` | Diff two specific extraction files |
 | `wha reset` | Delete the saved session (triggers a new QR code on next run) |
@@ -53,6 +60,24 @@ data/<group-name>_<ISO-timestamp>.json
 
 The `--txt` flag writes an additional human-readable file at the same path with a `.txt` extension, listing named members first (alphabetically), then unnamed members, each with their phone number and admin status.
 
+### Chat exports
+
+Chat exports are saved under `exports/` (kept separate from `data/` so `compare` and `status` are unaffected):
+
+```
+exports/<chat-name>_<ISO-timestamp>.txt
+```
+
+One line per message, in chronological order and local time:
+
+```
+[2026-01-01 10:00:00] Alexandra Sedas: Hello all
+[2026-01-01 10:01:00] You: Hi!
+[2026-01-01 10:02:00] +447584665606: <image omitted> nice view
+```
+
+Limitations: only history synced to WhatsApp Web / linked devices is available, so very old messages may be missing (same limit as WhatsApp Web itself). With `--media`, old attachments that WhatsApp no longer stores are reported as "unavailable".
+
 ## Example workflow
 
 ```sh
@@ -67,4 +92,11 @@ wha extract "My Group"
 
 # See who joined or left
 wha compare
+```
+
+```sh
+# Export a full conversation, with media
+wha chats
+wha export "Alexandra" --media
+wha export "+351 917 190 172" --since 2026-01-01 --json
 ```

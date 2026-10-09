@@ -7,6 +7,7 @@ A Windows CLI tool for connecting to WhatsApp, extracting group member lists, an
 Authenticate with WhatsApp using `whatsapp-web.js` (QR-code-based, same mechanism as WhatsApp Web), then:
 1. **Extract** — dump the member list of a group (phone number + display name) to a timestamped JSON file.
 2. **Compare** — diff two extractions to surface added and removed members.
+3. **Export** — dump the message history of any chat (individual or group) to `.txt` (and optionally `.json` + media).
 
 ## Tech Stack
 
@@ -27,8 +28,10 @@ whatsapp-helper/
 │   ├── client.ts        # whatsapp-web.js client init, QR display, session persistence
 │   ├── groups.ts        # groups and extract commands
 │   ├── compare.ts       # diff logic between two extraction files
-│   └── types.ts         # Member, Extraction, DiffResult interfaces
+│   ├── export.ts        # chats and export commands (message history export)
+│   └── types.ts         # Member, Extraction, DiffResult, ChatExport interfaces
 ├── data/                # Extraction output files (gitignored)
+├── exports/             # Chat export output files (gitignored)
 ├── .wwebjs_auth/        # whatsapp-web.js session cache (gitignored)
 ├── test.js              # Self-contained test runner (no framework)
 ├── package.json
@@ -60,6 +63,26 @@ interface DiffResult {
   added: Member[];
   removed: Member[];
 }
+
+interface ExportedMessage {
+  id: string;
+  timestamp: string;   // ISO 8601
+  sender: string;      // phone; empty for own messages
+  senderName: string;
+  fromMe: boolean;
+  type: string;        // whatsapp-web.js MessageTypes value ("chat", "image", ...)
+  body: string;        // text, or caption for media
+  hasMedia: boolean;
+  mediaFile?: string;  // relative path, set when --media downloaded it
+}
+
+interface ChatExport {
+  chatId: string;
+  chatName: string;
+  isGroup: boolean;
+  exportedAt: string;  // ISO 8601
+  messages: ExportedMessage[];  // chronological
+}
 ```
 
 ## Usage
@@ -71,6 +94,8 @@ Commands:
   groups                  List all WhatsApp groups you are a member of
   extract <group>         Extract members of a group and save to data/
   compare [file1] [file2] Diff two extraction files
+  chats                   List all chats (individual and group)
+  export <chat>           Export a chat's messages to exports/
   status                  Show session and data directory status
   reset                   Delete the saved session (triggers new QR on next run)
   help [command]          Display help for a command
@@ -115,6 +140,26 @@ wha compare data/abc_2025-01-01.json data/abc_2025-02-01.json
 ```
 
 Output: two sections — **Added** and **Removed** — each as a table of phone + name.
+
+### `wha chats`
+List all chats (individual and group): name, type, chat ID.
+
+### `wha export <chat>`
+Export the message history of a chat to `exports/<name>_<timestamp>.txt`. `<chat>` may be a chat ID, a phone number (individual chats; spaces, `+`, `-`, `()` ignored) or a case-insensitive name substring (exact match wins when several match).
+
+```
+wha export "My Group"
+wha export "+351 917 190 172" --since 2026-01-01
+wha export 5511999990000@c.us --limit 500 --json --media
+```
+
+Options:
+- `--limit <n>` — only the most recent `<n>` messages (default: all available)
+- `--since <date>` — only messages on or after `<date>` (any `Date.parse` format)
+- `--json` — also write `<base>.json` (`ChatExport`)
+- `--media` — download attachments to `exports/<base>_media/`, named `<seq>_<type>.<ext>`
+
+TXT format: header (chat, type, exported, message count), then one line per message `[YYYY-MM-DD HH:MM:SS] <sender>: <text>` in local time. Sender is `You`, the contact name, or `+<phone>`. Media appears as `<image omitted>` (or `<image: path>` when downloaded) followed by any caption; deleted messages as `<message deleted>`; locations as `<location>`. Continuation lines of multi-line messages are indented 4 spaces.
 
 ### `wha status`
 Show session and data directory status. Runs instantly with no WhatsApp connection needed.
@@ -167,6 +212,8 @@ wha groups
 wha extract "My Group"
 wha extract "My Group" --txt
 wha compare
+wha chats
+wha export "My Group" --json
 wha reset
 ```
 
@@ -185,6 +232,10 @@ node dist/cli.js groups
 - whatsapp-web.js `client.getChats()` returns all chats; filter by `chat.isGroup` to get groups.
 - Group participants are on `groupChat.participants` — each has `id.user` (phone) and `isAdmin`.
 - Display names: prefer `contact.pushname`, fall back to `contact.name`, then empty string. Fetching contacts requires `client.getContactById(participant.id._serialized)` — this adds latency for large groups.
+- `chat.fetchMessages({ limit: Infinity })` pages back via `loadEarlierMsgs` until history runs out; it only sees what is synced to the linked device. Notification messages are already filtered out by whatsapp-web.js. Results are re-sorted by timestamp.
+- Exports go to `exports/`, not `data/`: `compare` and `status` treat every `data/*.json` as an `Extraction`.
+- Export option validation runs before the client is opened, so bad `--limit`/`--since` fail fast.
+- `msg.downloadMedia()` returns `undefined` or throws for media WhatsApp no longer stores; these are counted as "unavailable", not fatal.
 - The `compare` command matches members by phone number, not by name (names change).
 - QR code is printed to stderr so stdout stays clean for scripting.
 - Commands that open the WhatsApp client call `process.exit()` explicitly after `destroyClient()` — Puppeteer keeps handles that prevent natural Node.js exit.
@@ -210,6 +261,7 @@ node dist/cli.js groups
 
 ```
 data/
+exports/
 .wwebjs_auth/
 dist/
 node_modules/

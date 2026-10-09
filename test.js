@@ -197,6 +197,93 @@ try {
   fs.unlinkSync(autoB);
 }
 
+// ─── Suite 6: Chat export TXT formatting ─────────────────────────────────────
+
+console.log('\n=== Suite 6: Chat export TXT formatting ===');
+
+const { chatExportToTxt, resolveChat } = require('./dist/export');
+
+const FIXTURE_EXPORT = {
+  chatId: GROUP_ID,
+  chatName: 'Open to Bliss updates',
+  isGroup: true,
+  exportedAt: '2026-03-01T10:00:00.000Z',
+  messages: [
+    { id: 'a', timestamp: '2026-01-01T10:00:00.000Z', sender: '351917190172', senderName: 'Alexandra Sedas',
+      fromMe: false, type: 'chat', body: 'Hello all', hasMedia: false },
+    { id: 'b', timestamp: '2026-01-01T10:01:00.000Z', sender: '', senderName: '',
+      fromMe: true, type: 'chat', body: 'line one\nline two', hasMedia: false },
+    { id: 'c', timestamp: '2026-01-01T10:02:00.000Z', sender: '447584665606', senderName: '',
+      fromMe: false, type: 'image', body: 'nice view', hasMedia: true },
+    { id: 'd', timestamp: '2026-01-01T10:03:00.000Z', sender: '33665757442', senderName: 'Alison Sarah Pym',
+      fromMe: false, type: 'ptt', body: '', hasMedia: true, mediaFile: 'x_media/00004_ptt.ogg' },
+    { id: 'e', timestamp: '2026-01-01T10:04:00.000Z', sender: '33665757442', senderName: 'Alison Sarah Pym',
+      fromMe: false, type: 'revoked', body: '', hasMedia: false },
+    { id: 'f', timestamp: '2026-01-01T10:05:00.000Z', sender: '33665757442', senderName: 'Alison Sarah Pym',
+      fromMe: false, type: 'location', body: '/9j/4AAQSkZJRgABAQ', hasMedia: false },
+  ],
+};
+
+const chatTxt = chatExportToTxt(FIXTURE_EXPORT);
+const msgLines = chatTxt.split('\n').filter(l => /^\[\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\] /.test(l));
+
+assertContains(chatTxt, 'Chat:      Open to Bliss updates', 'header: chat name');
+assertContains(chatTxt, 'Type:      group',                 'header: chat type');
+assertContains(chatTxt, 'Messages:  6',                     'header: message count');
+assert(msgLines.length === 6, `one timestamped line per message (got ${msgLines.length})`);
+assertContains(chatTxt, 'Alexandra Sedas: Hello all',       'named sender + body');
+assertContains(chatTxt, 'You: line one\n    line two',      'own message labelled "You", multi-line indented');
+assertContains(chatTxt, '+447584665606: <image omitted> nice view', 'unnamed sender falls back to phone; media caption kept');
+assertContains(chatTxt, '<voice message: x_media/00004_ptt.ogg>',   'downloaded media references file');
+assertContains(chatTxt, '<message deleted>',                'revoked message labelled');
+assertContains(chatTxt, 'Alison Sarah Pym: <location>',     'location labelled');
+assert(!chatTxt.includes('/9j/'),                           'location thumbnail not dumped as text');
+assert(chatTxt.indexOf('Hello all') < chatTxt.indexOf('line one'), 'messages kept in chronological order');
+
+// ─── Suite 7: Chat resolution ────────────────────────────────────────────────
+
+console.log('\n=== Suite 7: Chat resolution ===');
+
+const fakeChat = (serialized, name, isGroup) =>
+  ({ id: { _serialized: serialized, user: serialized.split('@')[0] }, name, isGroup });
+const CHATS = [
+  fakeChat(GROUP_ID, 'Open to Bliss updates', true),
+  fakeChat('351917190172@c.us', 'Alexandra Sedas', false),
+  fakeChat('33665757442@c.us', 'Alison', false),
+  fakeChat('33665757443@c.us', 'Alison Pym', false),
+];
+
+assert(resolveChat(CHATS, GROUP_ID).name === 'Open to Bliss updates', 'resolve by chat ID');
+assert(resolveChat(CHATS, '+351 917 190 172').name === 'Alexandra Sedas', 'resolve individual chat by phone');
+assert(resolveChat(CHATS, 'bliss').name === 'Open to Bliss updates', 'resolve by partial name (case-insensitive)');
+assert(resolveChat(CHATS, 'alison').name === 'Alison', 'exact name wins among multiple partial matches');
+
+let ambiguousErr = '';
+try { resolveChat(CHATS, 'ali'); } catch (e) { ambiguousErr = e.message; }
+assertContains(ambiguousErr, 'Multiple chats match', 'ambiguous name throws');
+
+let missingErr = '';
+try { resolveChat(CHATS, 'nobody'); } catch (e) { missingErr = e.message; }
+assertContains(missingErr, 'No chat found', 'unknown chat throws');
+
+// ─── Suite 8: Export option validation (no WhatsApp connection) ──────────────
+
+console.log('\n=== Suite 8: Export option validation ===');
+
+for (const [args, expected, label] of [
+  ['--limit 0',          '--limit must be a positive number', 'rejects --limit 0'],
+  ['--limit abc',        '--limit must be a positive number', 'rejects non-numeric --limit'],
+  ['--since not-a-date', 'Invalid --since date',              'rejects invalid --since'],
+]) {
+  let stderr = '';
+  try {
+    execSync(`node dist/cli.js export someone ${args}`, { encoding: 'utf-8', stdio: 'pipe' });
+  } catch (e) {
+    stderr = e.stderr;
+  }
+  assertContains(stderr, expected, label);
+}
+
 // ─── Summary ─────────────────────────────────────────────────────────────────
 
 console.log(`\n${'─'.repeat(40)}`);
