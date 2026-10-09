@@ -1,8 +1,12 @@
 import fs from 'fs';
 import path from 'path';
-import { Chat, GroupChat } from 'whatsapp-web.js';
+import { Chat, Client, GroupChat } from 'whatsapp-web.js';
 import { getClient } from './client';
 import type { Extraction, Member } from './types';
+
+// The typings declare these as interfaces only; the runtime exports the classes.
+// eslint-disable-next-line @typescript-eslint/no-var-requires
+const { GroupChat: GroupChatClass, PrivateChat: PrivateChatClass } = require('whatsapp-web.js');
 
 const DATA_DIR = 'data';
 
@@ -14,10 +18,60 @@ export function sanitizeName(name: string): string {
   return name.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 60);
 }
 
+// Replacement for client.getChats(). The library builds every chat model with
+// Promise.all, so a single chat that WhatsApp Web fails to load (seen with
+// newer WhatsApp Web builds, mostly "@lid" contacts) rejects the whole call.
+// Here each chat is loaded on its own; if the full model fails we fall back to
+// the fields read directly from the in-memory chat, which is all we need.
+async function loadChats(client: Client): Promise<Chat[]> {
+  const models = await client.pupPage!.evaluate(async () => {
+    const w = globalThis as any;
+    const plainWid = (wid: any) => ({ server: wid.server, user: wid.user, _serialized: wid._serialized });
+    const toPn = (wid: any) => {
+      try { return w.require('WAWebLidMigrationUtils').toPn(wid) ?? wid; } catch { return wid; }
+    };
+
+    const chats = w.require('WAWebCollections').Chat.getModelsArray();
+    return Promise.all(chats.map(async (chat: any) => {
+      try {
+        return await w.WWebJS.getChatModel(chat);
+      } catch {
+        // fall through to the minimal model
+      }
+      try {
+        const isGroup = !!chat.groupMetadata || chat.id.server === 'g.us';
+        let participants: any[] = [];
+        try {
+          participants = chat.groupMetadata?.participants?.getModelsArray().map((p: any) => ({
+            id: plainWid(toPn(p.id)),
+            isAdmin: !!p.isAdmin,
+            isSuperAdmin: !!p.isSuperAdmin,
+          })) ?? [];
+        } catch {
+          // leave participants empty
+        }
+        return {
+          id: plainWid(chat.id),
+          formattedTitle: chat.formattedTitle || chat.name || '',
+          isGroup,
+          t: chat.t,
+          groupMetadata: isGroup ? { participants } : undefined,
+        };
+      } catch {
+        return null;
+      }
+    }));
+  });
+
+  return models
+    .filter((m: any) => m)
+    .map((m: any) => (m.isGroup ? new GroupChatClass(client, m) : new PrivateChatClass(client, m)));
+}
+
 export async function getAllChats(): Promise<Chat[]> {
   const client = await getClient();
   return Promise.race([
-    client.getChats(),
+    loadChats(client),
     new Promise<never>((_, reject) =>
       setTimeout(
         () => reject(new Error('Timed out loading chats (60s). Try "wha reset" if this persists.')),

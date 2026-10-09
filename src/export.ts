@@ -39,7 +39,7 @@ export function resolveChat(chats: Chat[], query: string): Chat {
   const byId = chats.find((c) => c.id._serialized === query);
   if (byId) return byId;
 
-  // Phone number match for individual chats ("+351 912 345 678" → "351912345678")
+  // Phone number match for individual chats ("+351 912 345 678" â†’ "351912345678")
   const digits = query.replace(/[\s+()-]/g, '');
   if (/^\d+$/.test(digits)) {
     const byPhone = chats.find((c) => !c.isGroup && c.id.user === digits);
@@ -90,7 +90,7 @@ export function chatExportToTxt(exp: ChatExport): string {
   ];
 
   for (const m of exp.messages) {
-    const who = m.fromMe ? 'You' : (m.senderName || (m.sender ? `+${m.sender}` : 'Unknown'));
+    const who = m.fromMe ? 'You' : (m.senderName || (/^\d+$/.test(m.sender) ? `+${m.sender}` : m.sender || 'Unknown'));
     let text = m.body;
     if (m.type === 'location') {
       // Location bodies are base64 thumbnails, not text.
@@ -150,18 +150,41 @@ export async function exportChat(query: string, opts: ExportOptions = {}): Promi
   const mediaDir = path.join(EXPORT_DIR, mediaDirName);
   if (opts.media && msgs.some((m) => m.hasMedia)) fs.mkdirSync(mediaDir, { recursive: true });
 
-  const contactNames = new Map<string, string>();
-  async function nameFor(id: string): Promise<string> {
-    if (contactNames.has(id)) return contactNames.get(id)!;
-    let n = '';
-    try {
-      const contact = await client.getContactById(id);
-      n = contact.pushname || contact.name || '';
-    } catch {
-      // contact lookup failed — leave name empty
+  // Senders in groups are increasingly "@lid" IDs (WhatsApp's internal ID, not
+  // a phone number). Map them back to the phone number when WhatsApp knows it;
+  // otherwise keep the raw ID so different unknown senders stay distinguishable.
+  const senders = new Map<string, { phone: string; name: string }>();
+  async function senderInfo(id: string): Promise<{ phone: string; name: string }> {
+    if (senders.has(id)) return senders.get(id)!;
+    let phone = id.endsWith('@c.us') ? id.split('@')[0] : id;
+    if (id.endsWith('@lid')) {
+      try {
+        const pn = await client.pupPage!.evaluate((lid: string) => {
+          const w = globalThis as any;
+          const wid = w.require('WAWebWidFactory').createWid(lid);
+          return w.require('WAWebLidMigrationUtils').toPn(wid)?._serialized ?? null;
+        }, id);
+        if (pn) phone = pn.split('@')[0];
+      } catch {
+        // mapping unavailable — keep the raw ID
+      }
     }
-    contactNames.set(id, n);
-    return n;
+    let name = '';
+    // A saved address-book name may live on the phone-number contact rather
+    // than the "@lid" one, so try both.
+    const ids = /^\d+$/.test(phone) && !id.endsWith('@c.us') ? [id, `${phone}@c.us`] : [id];
+    for (const cid of ids) {
+      try {
+        const contact = await client.getContactById(cid);
+        name = contact.pushname || contact.name || '';
+      } catch {
+        // contact lookup failed — leave name empty
+      }
+      if (name) break;
+    }
+    const info = { phone, name };
+    senders.set(id, info);
+    return info;
   }
 
   const messages: ExportedMessage[] = [];
@@ -171,11 +194,14 @@ export async function exportChat(query: string, opts: ExportOptions = {}): Promi
     // In groups the sender is `author`; in individual chats it is `from`
     // (or `to` when the message is our own).
     const senderId = m.fromMe ? '' : (m.author || m.from);
+    const sender = senderId ? await senderInfo(senderId) : { phone: '', name: '' };
+    // notifyName is the display name the sender had when the message was sent.
+    const notifyName: string = (m as any)._data?.notifyName || '';
     const entry: ExportedMessage = {
       id: m.id._serialized,
       timestamp: new Date(m.timestamp * 1000).toISOString(),
-      sender: senderId ? senderId.split('@')[0] : '',
-      senderName: senderId ? await nameFor(senderId) : '',
+      sender: sender.phone,
+      senderName: sender.name || notifyName,
       fromMe: m.fromMe,
       type: m.type,
       body: m.body ?? '',

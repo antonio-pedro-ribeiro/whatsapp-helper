@@ -229,7 +229,9 @@ node dist/cli.js groups
 - `ready` fires before WhatsApp's internal chat store finishes loading. A 1-second delay after `ready` prevents `getChats()` from hanging on first call.
 - `getChats()` is wrapped with a 60-second timeout; if it expires the error message suggests `wha reset`.
 - `client.destroy()` is capped at 5 seconds and its errors are swallowed — `TargetCloseError` is expected when Chrome is already shutting down.
-- whatsapp-web.js `client.getChats()` returns all chats; filter by `chat.isGroup` to get groups.
+- Do not call `client.getChats()`: it builds every chat with `Promise.all`, and on current WhatsApp Web builds some chats (mostly `@lid` contacts) fail with an IndexedDB "No key or key range specified" error, which rejects the whole call (surfaced as an error whose message is just `r`). `getAllChats()` in `groups.ts` loads each chat separately and falls back to a minimal model (id, title, isGroup, participants) built from the in-memory chat; filter by `chat.isGroup` to get groups.
+- Group message authors are often `@lid` IDs, not phone numbers. `export.ts` maps them to phone numbers via `WAWebLidMigrationUtils.toPn`, keeps the raw `<id>@lid` when unmappable, and looks up names on both the `@lid` and `@c.us` contact, falling back to the message's `notifyName`.
+- `destroyClient()` sets a shutdown flag; a process-level `unhandledRejection` handler ignores "Target closed" errors after that (the library re-injects scripts on navigation without awaiting, which can race with `destroy()`).
 - Group participants are on `groupChat.participants` — each has `id.user` (phone) and `isAdmin`.
 - Display names: prefer `contact.pushname`, fall back to `contact.name`, then empty string. Fetching contacts requires `client.getContactById(participant.id._serialized)` — this adds latency for large groups.
 - `chat.fetchMessages({ limit: Infinity })` pages back via `loadEarlierMsgs` until history runs out; it only sees what is synced to the linked device. Notification messages are already filtered out by whatsapp-web.js. Results are re-sorted by timestamp.

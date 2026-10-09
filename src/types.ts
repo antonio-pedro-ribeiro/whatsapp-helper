@@ -23,7 +23,7 @@ export interface DiffResult {
 export interface ExportedMessage {
   id: string;
   timestamp: string;    // ISO 8601
-  sender: string;       // phone (E.164 without '+'); empty for own messages if unknown
+  sender: string;       // phone (E.164 without '+'), or raw "<id>@lid" if unresolvable; empty for own messages
   senderName: string;
   fromMe: boolean;
   type: string;         // whatsapp-web.js MessageTypes value, e.g. "chat", "image"

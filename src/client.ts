@@ -45,7 +45,19 @@ export async function getClient(): Promise<Client> {
   return client;
 }
 
+let shuttingDown = false;
+
+// whatsapp-web.js re-injects its scripts on page navigations without awaiting
+// the result; if that races with destroy() the rejection ("Target closed") is
+// unhandled and would crash the process after the command already succeeded.
+process.on('unhandledRejection', (err) => {
+  if (shuttingDown && /Target closed|TargetCloseError|Session closed/.test(String(err))) return;
+  console.error(err);
+  process.exit(1);
+});
+
 export async function destroyClient(): Promise<void> {
+  shuttingDown = true;
   if (clientInstance) {
     try {
       // Cap destroy() so a hung Puppeteer never blocks process.exit().
