@@ -123,12 +123,17 @@ interface HistoryStep {
 }
 
 // One step of history loading, run inside WhatsApp Web. First drains what the
-// linked device already stores locally (loadEarlierMsgs). With askPhone, it
+// linked device already stores locally (loadEarlierMsgs). With an anchor, it
 // then asks the phone for the next batch of older messages — the same request
 // as WhatsApp Web's "Click here to get older messages from your phone" — waits
 // for the reply and drains again.
-async function historyStep(client: Client, chatId: string, askPhone: boolean): Promise<HistoryStep> {
-  return client.pupPage!.evaluate(async (id: string, ask: boolean) => {
+//
+// The request names a starting message ("anchor") and the phone returns the
+// messages before it. WhatsApp Web always uses the oldest loaded message; the
+// phone silently ignores some anchors (presumably messages it no longer has),
+// so `anchor` picks the n-th oldest loaded message instead (0 = oldest).
+async function historyStep(client: Client, chatId: string, anchor: number | null): Promise<HistoryStep> {
+  return client.pupPage!.evaluate(async (id: string, anchorIdx: number | null) => {
     const req = (globalThis as any).require;
     const chat = req('WAWebCollections').Chat.get(id);
     const { loadEarlierMsgs } = req('WAWebChatLoadMessages');
@@ -145,16 +150,29 @@ async function historyStep(client: Client, chatId: string, askPhone: boolean): P
     };
 
     await drain();
-    if (!ask) return summary();
+    if (anchorIdx === null) return summary();
 
     let phone: 'ok' | 'error' | 'timeout' | 'unavailable' = 'unavailable';
+    const utils = req('WAWebNonMessageDataRequestHistorySyncOnDemandUtils');
+    const originalGetOldest = utils.getOldestMsgInChatFromDB;
     try {
       if (!req('WAWebSyncGatingUtils').isHistorySyncOnDemandEnabled()) return { ...summary(), phone };
+      // WhatsApp Web stops sending requests for 2 hours after 10 failures;
+      // failed anchors are expected here, so reset its failure record.
+      Object.assign(utils.historySyncOnDemandRequestsFailureRecord, {
+        disableRequestSending: false, failureCount: 0, firstFailureRequestTimeStampSec: undefined,
+      });
+      if (anchorIdx > 0) {
+        const sorted = chat.msgs.getModelsArray().slice().sort((a: any, b: any) => a.t - b.t);
+        const msg = sorted[Math.min(anchorIdx, sorted.length - 1)];
+        utils.getOldestMsgInChatFromDB = async () => msg;
+      }
       const events = req('WAWebHistorySyncOnDemandEvents').WAWebHistorySyncOnDemandEvents;
       const type = req('WAWebProtobufsE2E.pb').Message$PeerDataOperationRequestType.HISTORY_SYNC_ON_DEMAND;
       phone = await new Promise((resolve) => {
         const ok = () => done('ok');
         const err = () => done('error');
+        // WhatsApp Web fires the error event itself after its own 10s timeout.
         const timer = setTimeout(() => done('timeout'), 30_000);
         function done(result: 'ok' | 'error' | 'timeout') {
           clearTimeout(timer);
@@ -170,11 +188,16 @@ async function historyStep(client: Client, chatId: string, askPhone: boolean): P
       });
     } catch {
       // on-demand sync not available in this WhatsApp Web build
+    } finally {
+      utils.getOldestMsgInChatFromDB = originalGetOldest;
     }
     await drain();
     return { ...summary(), phone };
-  }, chatId, askPhone);
+  }, chatId, anchor);
 }
+
+// Anchors to try, in order, when a request for older messages brings nothing.
+const ANCHOR_RETRIES = [0, 1, 3, 10, 25];
 
 // Loads as much history as needed into WhatsApp Web's memory: everything
 // stored on this linked device, then older batches requested from the phone,
@@ -183,22 +206,24 @@ async function loadHistory(client: Client, chatId: string, limit: number, sinceM
   const enough = (s: HistoryStep) =>
     s.count >= limit || (sinceMs !== undefined && s.oldest !== null && s.oldest * 1000 < sinceMs);
 
-  let step = await historyStep(client, chatId, false);
+  let step = await historyStep(client, chatId, null);
   while (!enough(step)) {
-    const prev = step.count;
-    step = await historyStep(client, chatId, true);
-    if (step.count === prev) {
-      if (step.phone !== 'ok') {
-        process.stderr.write(
-          step.phone === 'unavailable'
-            ? '  Older messages are only on your phone, and this WhatsApp Web build cannot request them.\n'
-            : '  No older messages came back from your phone. Either that is the start of the history on your\n' +
-              '  phone, or the phone did not answer (keep it online with WhatsApp open and try again).\n'
-        );
-      }
+    const prev = step;
+    for (const anchor of ANCHOR_RETRIES) {
+      step = await historyStep(client, chatId, anchor);
+      if (step.phone === 'unavailable' || step.oldest !== prev.oldest) break;
+    }
+    if (step.oldest === prev.oldest) {
+      process.stderr.write(
+        step.phone === 'unavailable'
+          ? '  Older messages are only on your phone, and this WhatsApp Web build cannot request them.\n'
+          : '  No older messages came back from your phone. Either that is the start of the history on your\n' +
+            '  phone, or the phone did not answer (keep it online with WhatsApp open and try again).\n'
+      );
       break;
     }
-    process.stderr.write(`  loaded ${step.count} messages so far\n`);
+    const oldest = step.oldest !== null ? new Date(step.oldest * 1000).toISOString().slice(0, 10) : '?';
+    process.stderr.write(`  loaded ${step.count} messages so far (back to ${oldest})\n`);
   }
 }
 

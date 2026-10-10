@@ -76,7 +76,7 @@ One line per message, in chronological order and local time:
 [2026-01-01 10:02:00] +447584665606: <image omitted> nice view
 ```
 
-Limitations: only history synced to WhatsApp Web / linked devices is available, so very old messages may be missing (same limit as WhatsApp Web itself). With `--media`, old attachments that WhatsApp no longer stores are reported as "unavailable".
+Limitations: older messages are fetched from your phone (keep it online during the export), but WhatsApp only serves about the last 12 months of history to linked devices, so older messages are not included. For the complete history use WhatsApp's own *Export chat* on the phone. With `--media`, old attachments that WhatsApp no longer stores are reported as "unavailable".
 
 ## Example workflow
 
