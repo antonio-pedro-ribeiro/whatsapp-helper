@@ -1,6 +1,6 @@
 import fs from 'fs';
 import path from 'path';
-import { Chat, Message } from 'whatsapp-web.js';
+import { Chat, Client, Message } from 'whatsapp-web.js';
 import { getClient } from './client';
 import { getAllChats, sanitizeName } from './groups';
 import type { ChatExport, ExportedMessage } from './types';
@@ -116,10 +116,96 @@ function extensionFor(mimetype: string, filename?: string | null): string {
   return map[sub] ?? `.${sub.replace(/[^a-z0-9]/g, '')}`;
 }
 
+interface HistoryStep {
+  count: number;          // messages now loaded in the chat
+  oldest: number | null;  // unix seconds of the oldest loaded message
+  phone?: 'ok' | 'error' | 'timeout' | 'unavailable';
+}
+
+// One step of history loading, run inside WhatsApp Web. First drains what the
+// linked device already stores locally (loadEarlierMsgs). With askPhone, it
+// then asks the phone for the next batch of older messages — the same request
+// as WhatsApp Web's "Click here to get older messages from your phone" — waits
+// for the reply and drains again.
+async function historyStep(client: Client, chatId: string, askPhone: boolean): Promise<HistoryStep> {
+  return client.pupPage!.evaluate(async (id: string, ask: boolean) => {
+    const req = (globalThis as any).require;
+    const chat = req('WAWebCollections').Chat.get(id);
+    const { loadEarlierMsgs } = req('WAWebChatLoadMessages');
+    const drain = async () => {
+      // Capped so a single evaluate stays well under Puppeteer's protocol timeout.
+      for (let i = 0; i < 50; i++) {
+        const got = await loadEarlierMsgs({ chat });
+        if (!got || !got.length) break;
+      }
+    };
+    const summary = () => {
+      const all = chat.msgs.getModelsArray();
+      return { count: all.length, oldest: all.length ? Math.min(...all.map((m: any) => m.t)) : null };
+    };
+
+    await drain();
+    if (!ask) return summary();
+
+    let phone: 'ok' | 'error' | 'timeout' | 'unavailable' = 'unavailable';
+    try {
+      if (!req('WAWebSyncGatingUtils').isHistorySyncOnDemandEnabled()) return { ...summary(), phone };
+      const events = req('WAWebHistorySyncOnDemandEvents').WAWebHistorySyncOnDemandEvents;
+      const type = req('WAWebProtobufsE2E.pb').Message$PeerDataOperationRequestType.HISTORY_SYNC_ON_DEMAND;
+      phone = await new Promise((resolve) => {
+        const ok = () => done('ok');
+        const err = () => done('error');
+        const timer = setTimeout(() => done('timeout'), 30_000);
+        function done(result: 'ok' | 'error' | 'timeout') {
+          clearTimeout(timer);
+          events.off?.('history_sync_on_demand_events:success_history_sync_od', ok);
+          events.off?.('history_sync_on_demand_events:error_history_sync_od', err);
+          resolve(result);
+        }
+        events.on('history_sync_on_demand_events:success_history_sync_od', ok);
+        events.on('history_sync_on_demand_events:error_history_sync_od', err);
+        req('WAWebSendNonMessageDataRequest')
+          .sendPeerDataOperationRequest(type, { chatId: chat.id })
+          .catch(err);
+      });
+    } catch {
+      // on-demand sync not available in this WhatsApp Web build
+    }
+    await drain();
+    return { ...summary(), phone };
+  }, chatId, askPhone);
+}
+
+// Loads as much history as needed into WhatsApp Web's memory: everything
+// stored on this linked device, then older batches requested from the phone,
+// until the phone has nothing more, or --limit / --since is satisfied.
+async function loadHistory(client: Client, chatId: string, limit: number, sinceMs?: number): Promise<void> {
+  const enough = (s: HistoryStep) =>
+    s.count >= limit || (sinceMs !== undefined && s.oldest !== null && s.oldest * 1000 < sinceMs);
+
+  let step = await historyStep(client, chatId, false);
+  while (!enough(step)) {
+    const prev = step.count;
+    step = await historyStep(client, chatId, true);
+    if (step.count === prev) {
+      if (step.phone !== 'ok') {
+        process.stderr.write(
+          step.phone === 'unavailable'
+            ? '  Older messages are only on your phone, and this WhatsApp Web build cannot request them.\n'
+            : '  No older messages came back from your phone. Either that is the start of the history on your\n' +
+              '  phone, or the phone did not answer (keep it online with WhatsApp open and try again).\n'
+        );
+      }
+      break;
+    }
+    process.stderr.write(`  loaded ${step.count} messages so far\n`);
+  }
+}
+
 async function fetchMessages(chat: Chat, limit: number): Promise<Message[]> {
-  // limit = Infinity makes whatsapp-web.js page back through the whole history
-  // that is available on this linked device.
-  const msgs = await chat.fetchMessages({ limit });
+  // Puppeteer sends arguments as JSON, which turns Infinity into null — and a
+  // null limit makes whatsapp-web.js skip paging entirely. Use a finite number.
+  const msgs = await chat.fetchMessages({ limit: Number.isFinite(limit) ? limit : Number.MAX_SAFE_INTEGER });
   return msgs.sort((a, b) => a.timestamp - b.timestamp);
 }
 
@@ -139,6 +225,7 @@ export async function exportChat(query: string, opts: ExportOptions = {}): Promi
   const name = chatLabel(chat);
 
   process.stderr.write(`Loading messages for "${name}"...\n`);
+  await loadHistory(client, chat.id._serialized, limit, sinceMs);
   let msgs = await fetchMessages(chat, limit);
   if (sinceMs !== undefined) msgs = msgs.filter((m) => m.timestamp * 1000 >= sinceMs!);
 
