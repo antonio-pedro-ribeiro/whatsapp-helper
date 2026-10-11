@@ -4,7 +4,7 @@ import path from 'path';
 import { Command } from 'commander';
 import { destroyClient } from './client';
 import { compareExtractions } from './compare';
-import { exportChat, listChats } from './export';
+import { exportChat, listChats, type ExportOptions } from './export';
 import { extractGroup, listGroups } from './groups';
 import type { Extraction } from './types';
 
@@ -132,13 +132,15 @@ program
   });
 
 program
-  .command('export <chat>')
-  .description('Export the messages of a chat (by name, phone number or ID) to exports/')
+  .command('export [chat]')
+  .description('Export the messages of a chat (by name, phone number or ID), or of several chats, to exports/')
+  .option('--all', 'export every chat (individual and group) into exports/batch_<timestamp>/')
+  .option('--match <pattern>', 'export chats whose name, phone or ID matches a wildcard pattern (* and ?), e.g. "Family*"')
   .option('--limit <n>', 'only export the most recent <n> messages', (v) => Number.parseInt(v, 10))
   .option('--since <date>', 'only export messages on or after <date> (e.g. 2026-01-31)')
   .option('--json', 'also save a machine-readable (.json) version alongside the .txt')
   .option('--media', 'download media attachments into a folder next to the export')
-  .action(async (chat: string, opts: { limit?: number; since?: string; json?: boolean; media?: boolean }) => {
+  .action(async (chat: string | undefined, opts: ExportOptions) => {
     try {
       await exportChat(chat, opts);
     } catch (err) {

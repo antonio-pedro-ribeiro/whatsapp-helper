@@ -95,7 +95,7 @@ Commands:
   extract <group>         Extract members of a group and save to data/
   compare [file1] [file2] Diff two extraction files
   chats                   List all chats (individual and group)
-  export <chat>           Export a chat's messages to exports/
+  export [chat]           Export a chat's messages to exports/ (or --all / --match <pattern>)
   status                  Show session and data directory status
   reset                   Delete the saved session (triggers new QR on next run)
   help [command]          Display help for a command
@@ -144,7 +144,7 @@ Output: two sections — **Added** and **Removed** — each as a table of phone 
 ### `wha chats`
 List all chats (individual and group): name, type, chat ID.
 
-### `wha export <chat>`
+### `wha export [chat]`
 Export the message history of a chat to `exports/<name>_<timestamp>.txt`. `<chat>` may be a chat ID, a phone number (individual chats; spaces, `+`, `-`, `()` ignored) or a case-insensitive name substring (exact match wins when several match).
 
 ```
@@ -153,11 +153,17 @@ wha export "+351 917 190 172" --since 2026-01-01
 wha export 5511999990000@c.us --limit 500 --json --media
 ```
 
+Exactly one of `<chat>`, `--all` or `--match <pattern>` is required.
+
 Options:
+- `--all` — export every chat (individual and group)
+- `--match <pattern>` — export chats whose name, chat ID or bare number matches a wildcard pattern: `*` = any run, `?` = one char, case-insensitive, anchored (whole string). E.g. `"Family*"`, `"*@g.us"` (all groups), `"351*"`
 - `--limit <n>` — only the most recent `<n>` messages (default: all available)
 - `--since <date>` — only messages on or after `<date>` (any `Date.parse` format)
 - `--json` — also write `<base>.json` (`ChatExport`)
 - `--media` — download attachments to `exports/<base>_media/`, named `<seq>_<type>.<ext>`
+
+Batch exports (`--all` / `--match`) go to `exports/batch_<timestamp>/<name>.txt` (+ `<name>.json`, `<name>_media/`). Names that sanitize to the same base get `_2`, `_3`, … A failing chat is logged and skipped; the command exits 1 at the end listing failed chats.
 
 TXT format: header (chat, type, exported, message count), then one line per message `[YYYY-MM-DD HH:MM:SS] <sender>: <text>` in local time. Sender is `You`, the contact name, or `+<phone>`. Media appears as `<image omitted>` (or `<image: path>` when downloaded) followed by any caption; deleted messages as `<message deleted>`; locations as `<location>`. Continuation lines of multi-line messages are indented 4 spaces.
 
