@@ -41,7 +41,7 @@ wha <command>
 | `wha export --all` | Export every chat into `exports/batch_<timestamp>/` |
 | `wha export --match "<pattern>"` | Export chats whose name, phone or ID matches a wildcard (`*`, `?`), e.g. `"Family*"` |
 | `wha export <chat> --json` | Also write a machine-readable `.json` |
-| `wha export <chat> --media` | Also download media attachments into `exports/<name>_<timestamp>_media/` |
+| `wha chats export <chat> --media` (or `-media`, `-m`) | Also download all media attachments into `exports/<name>_<timestamp>_media/` |
 | `wha export <chat> --limit <n>` | Only the most recent `<n>` messages |
 | `wha export <chat> --since <date>` | Only messages on or after `<date>` (e.g. `2026-01-31`) |
 | `wha compare` | Diff the two most recent extractions for the same group |

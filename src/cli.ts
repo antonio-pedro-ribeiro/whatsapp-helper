@@ -152,7 +152,7 @@ function addExportCommand(parent: Command): void {
     .option('--limit <n>', 'only export the most recent <n> messages', (v) => Number.parseInt(v, 10))
     .option('--since <date>', 'only export messages on or after <date> (e.g. 2026-01-31)')
     .option('--json', 'also save a machine-readable (.json) version alongside the .txt')
-    .option('--media', 'download media attachments into a folder next to the export')
+    .option('-m, --media', 'download all media attachments (images, videos, audio, documents) into a folder next to the export')
     .action(runExport);
 }
 
@@ -207,7 +207,12 @@ program
     console.log(`Deleted ${authDir}. Next run will show a new QR code.`);
   });
 
-program.parseAsync(process.argv).catch((err) => {
+// Accept single-dash long options ("-media", "-json") as typed by people used
+// to Windows tools; Commander would otherwise read "-media" as "-m -e -d -i -a".
+const LONG_OPTIONS = new Set(['media', 'json', 'txt', 'all', 'match', 'limit', 'since']);
+const argv = process.argv.map((a) => (/^-[a-z]{2,}$/.test(a) && LONG_OPTIONS.has(a.slice(1)) ? `-${a}` : a));
+
+program.parseAsync(argv).catch((err) => {
   console.error(err.message);
   process.exit(1);
 });

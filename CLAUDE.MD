@@ -162,7 +162,7 @@ Options:
 - `--limit <n>` — only the most recent `<n>` messages (default: all available)
 - `--since <date>` — only messages on or after `<date>` (any `Date.parse` format)
 - `--json` — also write `<base>.json` (`ChatExport`)
-- `--media` — download attachments to `exports/<base>_media/`, named `<seq>_<type>.<ext>`
+- `--media` / `-media` / `-m` — download all attachments to `exports/<base>_media/`, named `<seq>_<type>.<ext>`
 
 Batch exports (`--all` / `--match`) go to `exports/batch_<timestamp>/<name>.txt` (+ `<name>.json`, `<name>_media/`). Names that sanitize to the same base get `_2`, `_3`, … A failing chat is logged and skipped; the command exits 1 at the end listing failed chats.
 
