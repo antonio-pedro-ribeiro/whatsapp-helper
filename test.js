@@ -258,6 +258,10 @@ assert(resolveChat(CHATS, '+351 917 190 172').name === 'Alexandra Sedas', 'resol
 assert(resolveChat(CHATS, 'bliss').name === 'Open to Bliss updates', 'resolve by partial name (case-insensitive)');
 assert(resolveChat(CHATS, 'alison').name === 'Alison', 'exact name wins among multiple partial matches');
 
+const LID_CHATS = [...CHATS, fakeChat('91203697660011@lid', 'Soraia', false)];
+assert(resolveChat(LID_CHATS, '+351 930 447 351', new Map([['91203697660011@lid', '351930447351']])).name === 'Soraia',
+  'resolve "@lid" individual chat by its mapped phone number');
+
 let ambiguousErr = '';
 try { resolveChat(CHATS, 'ali'); } catch (e) { ambiguousErr = e.message; }
 assertContains(ambiguousErr, 'Multiple chats match', 'ambiguous name throws');

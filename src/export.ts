@@ -37,14 +37,40 @@ function chatLabel(chat: Chat): string {
   return chat.name || chat.id.user;
 }
 
-export function resolveChat(chats: Chat[], query: string): Chat {
+// Phone numbers of individual "@lid" chats, as far as WhatsApp Web knows them.
+async function lidPhoneNumbers(client: Client, chats: Chat[]): Promise<Map<string, string>> {
+  const lids = chats.filter((c) => !c.isGroup && c.id.server === 'lid').map((c) => c.id._serialized);
+  if (lids.length === 0) return new Map();
+  try {
+    const pairs = await client.pupPage!.evaluate((ids: string[]) => {
+      const w = globalThis as any;
+      const { createWid } = w.require('WAWebWidFactory');
+      const { toPn } = w.require('WAWebLidMigrationUtils');
+      return ids.map((id) => {
+        try {
+          return [id, toPn(createWid(id))?.user ?? null];
+        } catch {
+          return [id, null];
+        }
+      });
+    }, lids);
+    return new Map(pairs.filter((p): p is [string, string] => !!p[1]));
+  } catch {
+    return new Map(); // mapping unavailable — phone lookup falls back to id.user
+  }
+}
+
+// `phones` maps chat IDs to phone numbers for individual chats whose ID is an
+// "@lid" (WhatsApp's internal ID), where `id.user` is not the phone number.
+export function resolveChat(chats: Chat[], query: string, phones: Map<string, string> = new Map()): Chat {
   const byId = chats.find((c) => c.id._serialized === query);
   if (byId) return byId;
 
   // Phone number match for individual chats ("+351 912 345 678" → "351912345678")
   const digits = query.replace(/[\s+()-]/g, '');
   if (/^\d+$/.test(digits)) {
-    const byPhone = chats.find((c) => !c.isGroup && c.id.user === digits);
+    const byPhone = chats.find((c) => !c.isGroup &&
+      (c.id.user === digits || phones.get(c.id._serialized) === digits));
     if (byPhone) return byPhone;
   }
 
@@ -459,7 +485,8 @@ export async function exportChat(query: string | undefined, opts: ExportOptions 
 
   // ── Single chat ──────────────────────────────────────────────────────────
   if (query !== undefined) {
-    const chat = resolveChat(chats, query);
+    const phones = /^[\d\s+()-]+$/.test(query) ? await lidPhoneNumbers(client, chats) : undefined;
+    const chat = resolveChat(chats, query, phones);
     const name = chatLabel(chat);
     process.stderr.write(`Loading messages for "${name}"...\n`);
     const base = `${sanitizeName(name)}_${timestampSlug()}`;
