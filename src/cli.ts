@@ -83,7 +83,10 @@ const program = new Command();
 program
   .name('wha')
   .description('WhatsApp group member extractor and differ, and chat exporter')
-  .version('1.0.0');
+  .version('1.0.0')
+  // Reject stray arguments (e.g. "wha chats export X") instead of silently
+  // ignoring them. Set before .command() calls so subcommands inherit it.
+  .allowExcessArguments(false);
 
 program
   .command('groups')
