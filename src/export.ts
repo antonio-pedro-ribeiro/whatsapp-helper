@@ -12,6 +12,8 @@ export interface ExportOptions {
   since?: string;
   json?: boolean;
   media?: boolean;
+  all?: boolean;
+  match?: string;
 }
 
 // Labels used in the .txt output for media and other non-text messages,
@@ -39,7 +41,7 @@ export function resolveChat(chats: Chat[], query: string): Chat {
   const byId = chats.find((c) => c.id._serialized === query);
   if (byId) return byId;
 
-  // Phone number match for individual chats ("+351 912 345 678" â†’ "351912345678")
+  // Phone number match for individual chats ("+351 912 345 678" → "351912345678")
   const digits = query.replace(/[\s+()-]/g, '');
   if (/^\d+$/.test(digits)) {
     const byPhone = chats.find((c) => !c.isGroup && c.id.user === digits);
@@ -234,32 +236,36 @@ async function fetchMessages(chat: Chat, limit: number): Promise<Message[]> {
   return msgs.sort((a, b) => a.timestamp - b.timestamp);
 }
 
-export async function exportChat(query: string, opts: ExportOptions = {}): Promise<void> {
-  const limit = opts.limit ?? Infinity;
-  if (!(limit > 0)) throw new Error('--limit must be a positive number.');
+export function globToRegExp(pattern: string): RegExp {
+  const escaped = pattern.replace(/[.+^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*').replace(/\?/g, '.');
+  return new RegExp(`^${escaped}$`, 'i');
+}
 
-  let sinceMs: number | undefined;
-  if (opts.since) {
-    sinceMs = Date.parse(opts.since);
-    if (Number.isNaN(sinceMs)) throw new Error(`Invalid --since date "${opts.since}". Use e.g. 2026-01-31.`);
-  }
+// Matches a wildcard pattern (* and ?, case-insensitive) against the chat
+// name, the chat ID and the bare phone/group number.
+export function selectChats(chats: Chat[], pattern: string): Chat[] {
+  const re = globToRegExp(pattern);
+  return chats.filter((c) => re.test(chatLabel(c)) || re.test(c.id._serialized) || re.test(c.id.user));
+}
 
-  const client = await getClient();
-  const chats = await getAllChats();
-  const chat = resolveChat(chats, query);
+interface ChatResult {
+  messages: number;
+  mediaSaved: number;
+  mediaFailed: number;
+  txtPath: string;
+}
+
+async function exportOne(client: Client, chat: Chat, opts: ExportOptions, sinceMs: number | undefined,
+  dir: string, base: string): Promise<ChatResult> {
   const name = chatLabel(chat);
-
-  process.stderr.write(`Loading messages for "${name}"...\n`);
+  const limit = opts.limit ?? Infinity;
   await loadHistory(client, chat.id._serialized, limit, sinceMs);
   let msgs = await fetchMessages(chat, limit);
-  if (sinceMs !== undefined) msgs = msgs.filter((m) => m.timestamp * 1000 >= sinceMs!);
+  if (sinceMs !== undefined) msgs = msgs.filter((m) => m.timestamp * 1000 >= sinceMs);
 
-  const exportedAt = new Date().toISOString();
-  const base = `${sanitizeName(name)}_${exportedAt.replace(/[:.]/g, '-')}`;
-  if (!fs.existsSync(EXPORT_DIR)) fs.mkdirSync(EXPORT_DIR, { recursive: true });
-
+  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
   const mediaDirName = `${base}_media`;
-  const mediaDir = path.join(EXPORT_DIR, mediaDirName);
+  const mediaDir = path.join(dir, mediaDirName);
   if (opts.media && msgs.some((m) => m.hasMedia)) fs.mkdirSync(mediaDir, { recursive: true });
 
   // Senders in groups are increasingly "@lid" IDs (WhatsApp's internal ID, not
@@ -345,23 +351,93 @@ export async function exportChat(query: string, opts: ExportOptions = {}): Promi
     chatId: chat.id._serialized,
     chatName: name,
     isGroup: chat.isGroup,
-    exportedAt,
+    exportedAt: new Date().toISOString(),
     messages,
   };
 
-  const txtPath = path.join(EXPORT_DIR, `${base}.txt`);
+  const txtPath = path.join(dir, `${base}.txt`);
   fs.writeFileSync(txtPath, chatExportToTxt(exp), 'utf-8');
-
-  console.log(`Exported ${messages.length} messages from "${name}"`);
-  console.log(`Saved to: ${txtPath}`);
-
   if (opts.json) {
-    const jsonPath = path.join(EXPORT_DIR, `${base}.json`);
-    fs.writeFileSync(jsonPath, JSON.stringify(exp, null, 2), 'utf-8');
-    console.log(`Saved to: ${jsonPath}`);
+    fs.writeFileSync(path.join(dir, `${base}.json`), JSON.stringify(exp, null, 2), 'utf-8');
   }
-  if (opts.media) {
-    console.log(`Media: ${mediaSaved} saved${mediaFailed ? `, ${mediaFailed} unavailable` : ''}` +
-      (mediaSaved ? ` (${mediaDir})` : ''));
+  return { messages: messages.length, mediaSaved, mediaFailed, txtPath };
+}
+
+function timestampSlug(): string {
+  return new Date().toISOString().replace(/[:.]/g, '-');
+}
+
+export async function exportChat(query: string | undefined, opts: ExportOptions = {}): Promise<void> {
+  const selectors = [query !== undefined, !!opts.all, opts.match !== undefined].filter(Boolean).length;
+  if (selectors !== 1) throw new Error('Specify exactly one of: a chat, --all, or --match <pattern>.');
+
+  const limit = opts.limit ?? Infinity;
+  if (!(limit > 0)) throw new Error('--limit must be a positive number.');
+
+  let sinceMs: number | undefined;
+  if (opts.since) {
+    sinceMs = Date.parse(opts.since);
+    if (Number.isNaN(sinceMs)) throw new Error(`Invalid --since date "${opts.since}". Use e.g. 2026-01-31.`);
+  }
+
+  const client = await getClient();
+  const chats = await getAllChats();
+
+  // ── Single chat ──────────────────────────────────────────────────────────
+  if (query !== undefined) {
+    const chat = resolveChat(chats, query);
+    const name = chatLabel(chat);
+    process.stderr.write(`Loading messages for "${name}"...\n`);
+    const base = `${sanitizeName(name)}_${timestampSlug()}`;
+    const r = await exportOne(client, chat, opts, sinceMs, EXPORT_DIR, base);
+
+    console.log(`Exported ${r.messages} messages from "${name}"`);
+    console.log(`Saved to: ${r.txtPath}`);
+    if (opts.json) console.log(`Saved to: ${path.join(EXPORT_DIR, `${base}.json`)}`);
+    if (opts.media) {
+      console.log(`Media: ${r.mediaSaved} saved${r.mediaFailed ? `, ${r.mediaFailed} unavailable` : ''}` +
+        (r.mediaSaved ? ` (${path.join(EXPORT_DIR, `${base}_media`)})` : ''));
+    }
+    return;
+  }
+
+  // ── Several chats (--all / --match) ──────────────────────────────────────
+  const selected = opts.all ? chats : selectChats(chats, opts.match!);
+  if (selected.length === 0) {
+    throw new Error(`No chat matches "${opts.match}". Run "wha chats" to see available chats.`);
+  }
+
+  const batchDir = path.join(EXPORT_DIR, `batch_${timestampSlug()}`);
+  process.stderr.write(`Exporting ${selected.length} chat(s) to ${batchDir}\n`);
+
+  const usedBases = new Set<string>();
+  const failures: string[] = [];
+  let totalMessages = 0;
+  let totalMedia = 0;
+  for (const [i, chat] of selected.entries()) {
+    const name = chatLabel(chat);
+    // Different chats can share a sanitized name — keep file names unique.
+    let base = sanitizeName(name) || 'chat';
+    for (let n = 2; usedBases.has(base.toLowerCase()); n++) base = `${sanitizeName(name) || 'chat'}_${n}`;
+    usedBases.add(base.toLowerCase());
+
+    process.stderr.write(`[${i + 1}/${selected.length}] "${name}"...\n`);
+    try {
+      const r = await exportOne(client, chat, opts, sinceMs, batchDir, base);
+      totalMessages += r.messages;
+      totalMedia += r.mediaSaved;
+      console.log(`  ${String(r.messages).padStart(6)} messages  ${name}`);
+    } catch (err) {
+      // One broken chat must not abort a long batch.
+      failures.push(name);
+      console.error(`  failed: "${name}": ${(err as Error).message}`);
+    }
+  }
+
+  console.log(`Exported ${selected.length - failures.length}/${selected.length} chats, ` +
+    `${totalMessages} messages${opts.media ? `, ${totalMedia} media files` : ''}`);
+  console.log(`Saved to: ${batchDir}`);
+  if (failures.length > 0) {
+    throw new Error(`${failures.length} chat(s) failed: ${failures.map((f) => `"${f}"`).join(', ')}`);
   }
 }

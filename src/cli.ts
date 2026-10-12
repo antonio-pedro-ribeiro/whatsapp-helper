@@ -4,7 +4,7 @@ import path from 'path';
 import { Command } from 'commander';
 import { destroyClient } from './client';
 import { compareExtractions } from './compare';
-import { exportChat, listChats } from './export';
+import { exportChat, listChats, type ExportOptions } from './export';
 import { extractGroup, listGroups } from './groups';
 import type { Extraction } from './types';
 
@@ -83,7 +83,10 @@ const program = new Command();
 program
   .name('wha')
   .description('WhatsApp group member extractor and differ, and chat exporter')
-  .version('1.0.0');
+  .version('1.0.0')
+  // Reject stray arguments (e.g. "wha chats export X") instead of silently
+  // ignoring them. Set before .command() calls so subcommands inherit it.
+  .allowExcessArguments(false);
 
 program
   .command('groups')
@@ -128,7 +131,7 @@ async function runListChats(): Promise<void> {
   }
 }
 
-async function runExport(chat: string, opts: { limit?: number; since?: string; json?: boolean; media?: boolean }): Promise<void> {
+async function runExport(chat: string | undefined, opts: ExportOptions): Promise<void> {
   try {
     await exportChat(chat, opts);
   } catch (err) {
@@ -142,8 +145,10 @@ async function runExport(chat: string, opts: { limit?: number; since?: string; j
 
 function addExportCommand(parent: Command): void {
   parent
-    .command('export <chat>')
-    .description('Export the entire message history of a chat (by name, phone number or ID) to a .txt in exports/')
+    .command('export [chat]')
+    .description('Export the entire message history of a chat (by name, phone number or ID), or of several chats, to exports/')
+    .option('--all', 'export every chat (individual and group) into exports/batch_<timestamp>/')
+    .option('--match <pattern>', 'export chats whose name, phone or ID matches a wildcard pattern (* and ?), e.g. "Family*"')
     .option('--limit <n>', 'only export the most recent <n> messages', (v) => Number.parseInt(v, 10))
     .option('--since <date>', 'only export messages on or after <date> (e.g. 2026-01-31)')
     .option('--json', 'also save a machine-readable (.json) version alongside the .txt')
@@ -163,6 +168,7 @@ addExportCommand(chats);
 
 // Top-level "wha export <chat>" kept as a shorthand.
 addExportCommand(program);
+
 
 program
   .command('compare [file1] [file2]')

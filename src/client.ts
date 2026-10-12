@@ -2,6 +2,26 @@ import { Client, LocalAuth } from 'whatsapp-web.js';
 import qrcode from 'qrcode-terminal';
 
 let clientInstance: Client | null = null;
+let shuttingDown = false;
+
+function isTargetClosed(err: unknown): boolean {
+  const e = err as { name?: string; message?: string } | undefined;
+  return e?.name === 'TargetCloseError' ||
+    /Target closed|Session closed|browser has disconnected/i.test(e?.message ?? '');
+}
+
+// whatsapp-web.js re-injects its scripts from an un-awaited 'framenavigated'
+// handler whenever WhatsApp Web reloads. If Chrome closes meanwhile, that
+// rejection is unhandled and would crash Node with a raw stack trace.
+process.on('unhandledRejection', (err) => {
+  if (isTargetClosed(err)) {
+    if (shuttingDown) return; // expected while destroying the client
+    process.stderr.write('The WhatsApp browser closed unexpectedly. Try again; if it persists, run "wha reset".\n');
+  } else {
+    process.stderr.write(`${(err as Error)?.stack ?? err}\n`);
+  }
+  process.exit(1);
+});
 
 export async function getClient(): Promise<Client> {
   if (clientInstance) return clientInstance;
@@ -44,17 +64,6 @@ export async function getClient(): Promise<Client> {
   clientInstance = client;
   return client;
 }
-
-let shuttingDown = false;
-
-// whatsapp-web.js re-injects its scripts on page navigations without awaiting
-// the result; if that races with destroy() the rejection ("Target closed") is
-// unhandled and would crash the process after the command already succeeded.
-process.on('unhandledRejection', (err) => {
-  if (shuttingDown && /Target closed|TargetCloseError|Session closed/.test(String(err))) return;
-  console.error(err);
-  process.exit(1);
-});
 
 export async function destroyClient(): Promise<void> {
   shuttingDown = true;

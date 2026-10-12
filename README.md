@@ -38,6 +38,8 @@ wha <command>
 | `wha extract <group> --txt` | Also write a human-readable `.txt` alongside the JSON |
 | `wha chats` | List all chats (individual and group) with their IDs |
 | `wha chats export <chat>` | Export a chat's entire history to a `.txt` in `exports/` (`<chat>` = name, phone number or chat ID). `wha export <chat>` is a shorthand |
+| `wha export --all` | Export every chat into `exports/batch_<timestamp>/` |
+| `wha export --match "<pattern>"` | Export chats whose name, phone or ID matches a wildcard (`*`, `?`), e.g. `"Family*"` |
 | `wha export <chat> --json` | Also write a machine-readable `.json` |
 | `wha export <chat> --media` | Also download media attachments into `exports/<name>_<timestamp>_media/` |
 | `wha export <chat> --limit <n>` | Only the most recent `<n>` messages |
@@ -76,6 +78,8 @@ One line per message, in chronological order and local time:
 [2026-01-01 10:02:00] +447584665606: <image omitted> nice view
 ```
 
+`--all` and `--match` (on `wha export` or `wha chats export`) write one file per chat into `exports/batch_<timestamp>/` (`<chat-name>.txt`, plus `.json` / `_media/` if requested); all other options apply to every chat. Patterns are case-insensitive and must match the whole name, so use `"*bliss*"` for "contains". Quote the pattern so your shell does not expand it. If one chat fails, the rest are still exported and the command exits with an error listing the failures.
+
 Limitations: older messages are fetched from your phone (keep it online during the export), but WhatsApp only serves about the last 12 months of history to linked devices, so older messages are not included. For the complete history use WhatsApp's own *Export chat* on the phone. With `--media`, old attachments that WhatsApp no longer stores are reported as "unavailable".
 
 ## Example workflow
@@ -99,4 +103,8 @@ wha compare
 wha chats
 wha export "Alexandra" --media
 wha export "+351 917 190 172" --since 2026-01-01 --json
+
+# Export several chats at once
+wha export --match "Family*" --media
+wha export --all --since 2026-01-01
 ```

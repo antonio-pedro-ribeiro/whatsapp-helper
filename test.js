@@ -201,7 +201,7 @@ try {
 
 console.log('\n=== Suite 6: Chat export TXT formatting ===');
 
-const { chatExportToTxt, resolveChat } = require('./dist/export');
+const { chatExportToTxt, resolveChat, selectChats, globToRegExp } = require('./dist/export');
 
 const FIXTURE_EXPORT = {
   chatId: GROUP_ID,
@@ -274,6 +274,8 @@ for (const [args, expected, label] of [
   ['--limit 0',          '--limit must be a positive number', 'rejects --limit 0'],
   ['--limit abc',        '--limit must be a positive number', 'rejects non-numeric --limit'],
   ['--since not-a-date', 'Invalid --since date',              'rejects invalid --since'],
+  ['--all',              'Specify exactly one of',            'rejects chat + --all'],
+  ['--match "A*"',       'Specify exactly one of',            'rejects chat + --match'],
 ]) {
   let stderr = '';
   try {
@@ -283,6 +285,32 @@ for (const [args, expected, label] of [
   }
   assertContains(stderr, expected, label);
 }
+
+{
+  let stderr = '';
+  try {
+    execSync('node dist/cli.js export', { encoding: 'utf-8', stdio: 'pipe' });
+  } catch (e) {
+    stderr = e.stderr;
+  }
+  assertContains(stderr, 'Specify exactly one of', 'rejects export with no chat, --all or --match');
+}
+
+// ─── Suite 9: Wildcard chat selection ────────────────────────────────────────
+
+console.log('\n=== Suite 9: Wildcard chat selection ===');
+
+const names = (list) => list.map(c => c.name).sort().join('|');
+
+assert(names(selectChats(CHATS, 'ali*')) === 'Alison|Alison Pym', '"ali*" matches names starting with "ali" (case-insensitive)');
+assert(names(selectChats(CHATS, '*bliss*')) === 'Open to Bliss updates', '"*bliss*" matches substring');
+assert(names(selectChats(CHATS, 'bliss')).length === 0, 'pattern without wildcards must match the whole name');
+assert(names(selectChats(CHATS, 'Alison')) === 'Alison', 'exact pattern matches one chat');
+assert(names(selectChats(CHATS, 'Alison P?m')) === 'Alison Pym', '"?" matches a single character');
+assert(names(selectChats(CHATS, '3366575744?')) === 'Alison|Alison Pym', 'pattern matches phone numbers');
+assert(names(selectChats(CHATS, '*@g.us')) === 'Open to Bliss updates', 'pattern matches chat IDs (all groups)');
+assert(names(selectChats(CHATS, '*')).split('|').length === CHATS.length, '"*" matches every chat');
+assert(globToRegExp('a.b(c)+').test('a.b(c)+') && !globToRegExp('a.b').test('axb'), 'regex metacharacters are literal');
 
 // ─── Summary ─────────────────────────────────────────────────────────────────
 
