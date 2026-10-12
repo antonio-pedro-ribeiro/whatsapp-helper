@@ -158,7 +158,9 @@ async function historyStep(client: Client, chatId: string, anchor: number | null
     const utils = req('WAWebNonMessageDataRequestHistorySyncOnDemandUtils');
     const originalGetOldest = utils.getOldestMsgInChatFromDB;
     try {
-      if (!req('WAWebSyncGatingUtils').isHistorySyncOnDemandEnabled()) return { ...summary(), phone };
+      // isHistorySyncOnDemandEnabled() is false for many accounts, which only
+      // hides WhatsApp Web's "get older messages" button: the phone still
+      // answers the request, so send it regardless.
       // WhatsApp Web stops sending requests for 2 hours after 10 failures;
       // failed anchors are expected here, so reset its failure record.
       Object.assign(utils.historySyncOnDemandRequestsFailureRecord, {
@@ -171,23 +173,27 @@ async function historyStep(client: Client, chatId: string, anchor: number | null
       }
       const events = req('WAWebHistorySyncOnDemandEvents').WAWebHistorySyncOnDemandEvents;
       const type = req('WAWebProtobufsE2E.pb').Message$PeerDataOperationRequestType.HISTORY_SYNC_ON_DEMAND;
-      phone = await new Promise((resolve) => {
-        const ok = () => done('ok');
-        const err = () => done('error');
-        // WhatsApp Web fires the error event itself after its own 10s timeout.
-        const timer = setTimeout(() => done('timeout'), 30_000);
-        function done(result: 'ok' | 'error' | 'timeout') {
-          clearTimeout(timer);
-          events.off?.('history_sync_on_demand_events:success_history_sync_od', ok);
-          events.off?.('history_sync_on_demand_events:error_history_sync_od', err);
-          resolve(result);
-        }
-        events.on('history_sync_on_demand_events:success_history_sync_od', ok);
-        events.on('history_sync_on_demand_events:error_history_sync_od', err);
-        req('WAWebSendNonMessageDataRequest')
-          .sendPeerDataOperationRequest(type, { chatId: chat.id })
-          .catch(err);
-      });
+      // With the gate off, the success/error events often never fire even
+      // though the phone's messages do arrive, so also poll for new messages.
+      let succeeded = false;
+      let failed = false;
+      const ok = () => { succeeded = true; };
+      const err = () => { failed = true; };
+      events.on('history_sync_on_demand_events:success_history_sync_od', ok);
+      events.on('history_sync_on_demand_events:error_history_sync_od', err);
+      req('WAWebSendNonMessageDataRequest')
+        .sendPeerDataOperationRequest(type, { chatId: chat.id })
+        .catch(err);
+      const deadline = Date.now() + 30_000;
+      phone = 'timeout';
+      while (Date.now() < deadline) {
+        await new Promise((r) => setTimeout(r, 2000));
+        const got = await loadEarlierMsgs({ chat });
+        if ((got && got.length) || succeeded) { phone = 'ok'; break; }
+      }
+      if (phone === 'timeout' && failed) phone = 'error';
+      events.off?.('history_sync_on_demand_events:success_history_sync_od', ok);
+      events.off?.('history_sync_on_demand_events:error_history_sync_od', err);
     } catch {
       // on-demand sync not available in this WhatsApp Web build
     } finally {
@@ -234,6 +240,67 @@ async function fetchMessages(chat: Chat, limit: number): Promise<Message[]> {
   // null limit makes whatsapp-web.js skip paging entirely. Use a finite number.
   const msgs = await chat.fetchMessages({ limit: Number.isFinite(limit) ? limit : Number.MAX_SAFE_INTEGER });
   return msgs.sort((a, b) => a.timestamp - b.timestamp);
+}
+
+// Current WhatsApp Web message keys no longer carry `_serialized`, so build
+// the usual "<fromMe>_<chat>_<id>" form when it is missing.
+function messageId(m: Message): string {
+  const id = m.id as any;
+  if (id._serialized) return id._serialized;
+  const remote = typeof id.remote === 'string' ? id.remote : id.remote?._serialized ?? '';
+  return `${id.fromMe}_${remote}_${id.id}`;
+}
+
+interface DownloadedMedia {
+  mimetype: string;
+  filename: string | null;
+  data: string; // base64
+}
+
+// Replaces whatsapp-web.js' Message.downloadMedia(), which no longer works on
+// current WhatsApp Web: it looks the message up by `id._serialized` (now
+// undefined) and calls downloadAndMaybeDecrypt without a mimetype, which is
+// now rejected ("Unexpected mimetype application/octet-stream").
+// The message is found by its raw ID among the chat's loaded messages.
+async function downloadMedia(client: Client, chatId: string, rawId: string): Promise<DownloadedMedia | null> {
+  return client.pupPage!.evaluate(async (cid: string, rid: string) => {
+    const req = (globalThis as any).require;
+    const chat = req('WAWebCollections').Chat.get(cid);
+    const msg = chat?.msgs.getModelsArray().find((x: any) => x.id.id === rid);
+    if (!msg || !msg.directPath) return null;
+
+    const qpl = { addAnnotations() { return this; }, addPoint() { return this; } };
+    const decrypt = () => req('WAWebDownloadManager').downloadManager.downloadAndMaybeDecrypt({
+      directPath: msg.directPath,
+      encFilehash: msg.encFilehash,
+      filehash: msg.filehash,
+      mediaKey: msg.mediaKey,
+      mediaKeyTimestamp: msg.mediaKeyTimestamp,
+      type: msg.type,
+      mimetype: msg.mimetype,
+      signal: new AbortController().signal,
+      downloadQpl: qpl,
+    });
+
+    let buf: ArrayBuffer;
+    try {
+      buf = await decrypt();
+    } catch {
+      // The CDN link may have expired: let WhatsApp Web refresh it (it asks the
+      // phone to re-upload when needed), then try once more.
+      await msg.downloadMedia({ downloadEvenIfExpensive: true, rmrReason: 1 });
+      if (!msg.directPath) return null;
+      buf = await decrypt();
+    }
+
+    // Base64-encode in chunks; String.fromCharCode(...bytes) overflows the stack on large files.
+    const bytes = new Uint8Array(buf);
+    let bin = '';
+    for (let i = 0; i < bytes.length; i += 0x8000) {
+      bin += String.fromCharCode.apply(null, Array.from(bytes.subarray(i, i + 0x8000)));
+    }
+    return { mimetype: msg.mimetype, filename: msg.filename ?? null, data: btoa(bin) };
+  }, chatId, rawId);
 }
 
 export function globToRegExp(pattern: string): RegExp {
@@ -316,7 +383,7 @@ async function exportOne(client: Client, chat: Chat, opts: ExportOptions, sinceM
     // notifyName is the display name the sender had when the message was sent.
     const notifyName: string = (m as any)._data?.notifyName || '';
     const entry: ExportedMessage = {
-      id: m.id._serialized,
+      id: messageId(m),
       timestamp: new Date(m.timestamp * 1000).toISOString(),
       sender: sender.phone,
       senderName: sender.name || notifyName,
@@ -328,7 +395,11 @@ async function exportOne(client: Client, chat: Chat, opts: ExportOptions, sinceM
 
     if (opts.media && m.hasMedia) {
       try {
-        const media = await m.downloadMedia();
+        // Cap each download: re-uploads of old media from the phone can hang.
+        const media = await Promise.race([
+          downloadMedia(client, chat.id._serialized, m.id.id),
+          new Promise<null>((resolve) => setTimeout(() => resolve(null), 60_000)),
+        ]);
         if (media) {
           const file = `${String(i + 1).padStart(5, '0')}_${m.type}${extensionFor(media.mimetype, media.filename)}`;
           fs.writeFileSync(path.join(mediaDir, file), Buffer.from(media.data, 'base64'));
@@ -344,6 +415,9 @@ async function exportOne(client: Client, chat: Chat, opts: ExportOptions, sinceM
     }
 
     messages.push(entry);
+    if (opts.media && m.hasMedia && (mediaSaved + mediaFailed) % 25 === 0) {
+      process.stderr.write(`  media: ${mediaSaved} saved, ${mediaFailed} unavailable\n`);
+    }
     if ((i + 1) % 500 === 0) process.stderr.write(`  processed ${i + 1}/${msgs.length}\n`);
   }
 
