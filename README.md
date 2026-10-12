@@ -37,7 +37,7 @@ wha <command>
 | `wha extract <group>` | Extract members of a group to `data/` |
 | `wha extract <group> --txt` | Also write a human-readable `.txt` alongside the JSON |
 | `wha chats` | List all chats (individual and group) with their IDs |
-| `wha export <chat>` | Export a chat's messages to `exports/` (`<chat>` = name, phone number or chat ID) |
+| `wha chats export <chat>` | Export a chat's entire history to a `.txt` in `exports/` (`<chat>` = name, phone number or chat ID). `wha export <chat>` is a shorthand |
 | `wha export <chat> --json` | Also write a machine-readable `.json` |
 | `wha export <chat> --media` | Also download media attachments into `exports/<name>_<timestamp>_media/` |
 | `wha export <chat> --limit <n>` | Only the most recent `<n>` messages |

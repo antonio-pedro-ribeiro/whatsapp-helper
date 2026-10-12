@@ -95,6 +95,7 @@ Commands:
   extract <group>         Extract members of a group and save to data/
   compare [file1] [file2] Diff two extraction files
   chats                   List all chats (individual and group)
+  chats export <chat>     Export a chat's entire history (same as "export <chat>")
   export <chat>           Export a chat's messages to exports/
   status                  Show session and data directory status
   reset                   Delete the saved session (triggers new QR on next run)
@@ -144,7 +145,7 @@ Output: two sections — **Added** and **Removed** — each as a table of phone 
 ### `wha chats`
 List all chats (individual and group): name, type, chat ID.
 
-### `wha export <chat>`
+### `wha chats export <chat>` (alias: `wha export <chat>`)
 Export the message history of a chat to `exports/<name>_<timestamp>.txt`. `<chat>` may be a chat ID, a phone number (individual chats; spaces, `+`, `-`, `()` ignored) or a case-insensitive name substring (exact match wins when several match).
 
 ```

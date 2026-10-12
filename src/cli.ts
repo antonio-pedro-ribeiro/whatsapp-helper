@@ -116,39 +116,53 @@ program
     }
   });
 
-program
-  .command('chats')
-  .description('List all WhatsApp chats (individual and group)')
-  .action(async () => {
-    try {
-      await listChats();
-    } catch (err) {
-      console.error((err as Error).message);
-      process.exitCode = 1;
-    } finally {
-      await destroyClient();
-      process.exit(process.exitCode ?? 0);
-    }
-  });
+async function runListChats(): Promise<void> {
+  try {
+    await listChats();
+  } catch (err) {
+    console.error((err as Error).message);
+    process.exitCode = 1;
+  } finally {
+    await destroyClient();
+    process.exit(process.exitCode ?? 0);
+  }
+}
 
-program
-  .command('export <chat>')
-  .description('Export the messages of a chat (by name, phone number or ID) to exports/')
-  .option('--limit <n>', 'only export the most recent <n> messages', (v) => Number.parseInt(v, 10))
-  .option('--since <date>', 'only export messages on or after <date> (e.g. 2026-01-31)')
-  .option('--json', 'also save a machine-readable (.json) version alongside the .txt')
-  .option('--media', 'download media attachments into a folder next to the export')
-  .action(async (chat: string, opts: { limit?: number; since?: string; json?: boolean; media?: boolean }) => {
-    try {
-      await exportChat(chat, opts);
-    } catch (err) {
-      console.error((err as Error).message);
-      process.exitCode = 1;
-    } finally {
-      await destroyClient();
-      process.exit(process.exitCode ?? 0);
-    }
-  });
+async function runExport(chat: string, opts: { limit?: number; since?: string; json?: boolean; media?: boolean }): Promise<void> {
+  try {
+    await exportChat(chat, opts);
+  } catch (err) {
+    console.error((err as Error).message);
+    process.exitCode = 1;
+  } finally {
+    await destroyClient();
+    process.exit(process.exitCode ?? 0);
+  }
+}
+
+function addExportCommand(parent: Command): void {
+  parent
+    .command('export <chat>')
+    .description('Export the entire message history of a chat (by name, phone number or ID) to a .txt in exports/')
+    .option('--limit <n>', 'only export the most recent <n> messages', (v) => Number.parseInt(v, 10))
+    .option('--since <date>', 'only export messages on or after <date> (e.g. 2026-01-31)')
+    .option('--json', 'also save a machine-readable (.json) version alongside the .txt')
+    .option('--media', 'download media attachments into a folder next to the export')
+    .action(runExport);
+}
+
+// "wha chats" lists chats; "wha chats export <chat>" exports one.
+const chats = program
+  .command('chats')
+  .description('List all WhatsApp chats (individual and group), or export one with "chats export <chat>"');
+chats
+  .command('list', { isDefault: true })
+  .description('List all WhatsApp chats (individual and group)')
+  .action(runListChats);
+addExportCommand(chats);
+
+// Top-level "wha export <chat>" kept as a shorthand.
+addExportCommand(program);
 
 program
   .command('compare [file1] [file2]')
